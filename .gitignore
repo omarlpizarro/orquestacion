@@ -1,0 +1,53 @@
+# Dependencias
+node_modules/
+.pnpm-store/
+
+# Builds
+dist/
+build/
+.next/
+out/
+*.tsbuildinfo
+
+# Turborepo
+.turbo/
+
+# Entorno
+.env
+.env.*
+!.env.example
+
+# Expo
+.expo/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Docker y datos locales
+docker/data/
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Editor y sistema
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# Tests y cobertura
+coverage/
+.vitest/
+playwright-report/
+test-results/
+
+# Claude Code
+.claude/settings.local.json
