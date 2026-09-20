@@ -1,0 +1,29 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+allowBuilds:
+  # cpu-features y ssh2: dependencias de testcontainers (exec dentro del
+  # contenedor). protobufjs: dependencia de testcontainers. esbuild: usado
+  # por tsx y vitest para descargar su binario nativo. Los cuatro son
+  # paquetes ampliamente usados; sin sus scripts de build no funcionan.
+  cpu-features: true
+  esbuild: true
+  protobufjs: true
+  ssh2: true
+minimumReleaseAgeExclude:
+  - '@orpc/client@1.15.2'
+  - '@orpc/contract@1.15.2'
+  - '@orpc/interop@1.15.2'
+  - '@orpc/nest@1.15.2'
+  - '@orpc/openapi-client@1.15.2'
+  - '@orpc/openapi@1.15.2'
+  - '@orpc/server@1.15.2'
+  - '@orpc/shared@1.15.2'
+  - '@orpc/standard-server-aws-lambda@1.15.2'
+  - '@orpc/standard-server-fastify@1.15.2'
+  - '@orpc/standard-server-fetch@1.15.2'
+  - '@orpc/standard-server-node@1.15.2'
+  - '@orpc/standard-server-peer@1.15.2'
+  - '@orpc/standard-server@1.15.2'
+  - '@types/node@24.13.6'
+  - dotenv@18.0.1

@@ -36,7 +36,9 @@ Estas no se negocian y no se preguntan. Violarlas es un bug, no una opción de d
    (`app.current_org`, `app.current_member`, `app.request_id`). Nunca uses el
    cliente de base sin contexto, ni siquiera en un script.
 4. **Nunca uses el rol de base dueño del esquema desde la aplicación.** La app
-   corre como `app_user`, que no tiene `BYPASSRLS`.
+   se conecta como `app_login` (hereda los permisos de `app_user`, un rol de
+   grupo `NOLOGIN`), ninguno de los dos con `BYPASSRLS`. Las migraciones corren
+   como `app_owner`, que la aplicación nunca usa.
 5. **Ningún módulo consulta tablas de otro módulo.** Se comunican por servicios
    exportados y eventos in-process. Ver sección 5.
 6. **Los IDs son UUIDv7 generados en el cliente**, no `gen_random_uuid()` del lado
@@ -54,28 +56,32 @@ Estas no se negocian y no se preguntan. Violarlas es un bug, no una opción de d
 
 ## 3. Stack
 
-Decidido y cerrado. No propongas alternativas salvo que te lo pidan explícitamente.
+No propongas alternativas a esta tabla por preferencia. Sí frená y planteá el caso cuando una elección esté bloqueada por un hecho verificable: un paquete sin mantenimiento, una incompatibilidad de versiones, una licencia que cambió. Adjuntá la evidencia.
+Ejemplo: @ts-rest/nest (última estable 3.52.1, marzo 2025) declara peer @nestjs/core ^9||^10||^11 y zod ^3.22.3. NestJS ya va por la 12 y Zod por la 4.
 
-| Capa | Herramienta | Nota |
-| --- | --- | --- |
-| Runtime | Node LTS | Fijar versión exacta en `.nvmrc` al iniciar |
-| Lenguaje | TypeScript, `strict: true` | Sin `any` salvo en límites de terceros, con comentario |
-| API | NestJS con adaptador Fastify | Módulos = fronteras del monolito modular |
-| Base de datos | PostgreSQL 17 | Extensiones: `btree_gist`, `pg_trgm`, `pgcrypto`, `ltree` |
-| ORM | Drizzle | SQL-first. Migraciones con `drizzle-kit` |
-| Contratos | Zod + ts-rest | Fuente única en `packages/contracts` |
-| Auth | Better Auth + plugin `organization` | Tablas generadas por su CLI, no se editan a mano |
-| Jobs | pg-boss | Sobre el mismo Postgres. Encolado transaccional |
-| Offline | PowerSync (Open Edition, self-hosted) | Bucket storage en Postgres separado |
-| Móvil | Expo / React Native | SQLite vía PowerSync |
-| Web | Next.js App Router | |
-| PDF | Playwright renderizando una ruta de `apps/web` | Contenedor aparte |
-| Excel | ExcelJS | |
-| Storage | S3-compatible (MinIO en dev, R2 o MinIO en prod) | Presigned URLs |
-| Lint y formato | Biome | Reemplaza ESLint y Prettier |
-| Tests | Vitest + Testcontainers | Postgres real en integración, nunca mocks de base |
-| Fronteras | dependency-cruiser | Falla el build si un módulo cruza |
-| Infra | Docker Compose sobre Ubuntu LTS, gestionado con Coolify | |
+| Capa | Herramienta | Versión exacta | Nota |
+| --- | --- | --- | --- |
+| Runtime | Node LTS | 24.16.0 | `.nvmrc` |
+| Gestor de paquetes | pnpm (vía corepack) | 12.4.2 | |
+| Lenguaje | TypeScript, `strict: true` | 6.0.3 | Sin `any` salvo en límites de terceros, con comentario. No 7.x: todavía no expone API de compilador, que `nest build` necesita |
+| API | NestJS con adaptador Fastify | 12.0.3 | Módulos = fronteras del monolito modular. ESM puro (`"type": "module"`) |
+| Base de datos | PostgreSQL 17 | — | Extensiones: `btree_gist`, `pg_trgm`, `pgcrypto`, `ltree` |
+| Driver de Postgres | `pg` | 8.23.0 | No `postgres` (postgres.js): pg-boss ya depende de `pg`, dos drivers duplicarían pools |
+| ORM | Drizzle | `drizzle-orm` 0.45.2, `drizzle-kit` 0.31.10 | SQL-first. Migraciones con `drizzle-kit`, incluidas las de SQL crudo (`generate --custom`) |
+| Contratos | Zod 4 + oRPC | `zod` 4.6.5, `@orpc/*` 1.15.2 | Ver ADR-005. Fuente única en `packages/contracts`, ESM puro. **Es la v1 de oRPC: se usa `oc.route()`, no la sintaxis de `oc.meta(openapi(...))` que muestra orpc.dev (esa es v2, sin publicar en npm todavía)** |
+| Auth | Better Auth + plugin `organization` | — | Tablas generadas por su CLI, no se editan a mano |
+| Jobs | pg-boss | 12.33.2 | Sobre el mismo Postgres. Encolado transaccional |
+| Offline | PowerSync (Open Edition, self-hosted) | — | Bucket storage en Postgres separado |
+| Móvil | Expo / React Native | — | SQLite vía PowerSync |
+| Web | Next.js App Router | `next` 16.3.5, `react`/`react-dom` 19.3.0 | |
+| PDF | Playwright renderizando una ruta de `apps/web` | — | Contenedor aparte |
+| Excel | ExcelJS | — | |
+| Storage | S3-compatible (MinIO en dev, R2 o MinIO en prod) | — | Presigned URLs |
+| Lint y formato | Biome | 2.5.14 | Reemplaza ESLint y Prettier. `javascript.parser.unsafeParameterDecoratorsEnabled: true` para que parsee los decoradores de parámetro de Nest; `style.useImportType` apagada a propósito (ver `packages/config/biome/base.json`) |
+| Tests | Vitest + Testcontainers | `vitest`/`@vitest/coverage-v8` 4.1.11, `testcontainers`/`@testcontainers/postgresql` 12.1.0 | Postgres real en integración, nunca mocks de base |
+| Fronteras | dependency-cruiser | 18.3.1 | Falla el build si un módulo cruza. `tsPreCompilationDeps: true` es obligatorio o las reglas contra `import type` quedan mudas |
+| Monorepo | Turborepo | 2.11.2 | |
+| Infra | Docker Compose sobre Ubuntu LTS, gestionado con Coolify | — | |
 
 **Versiones:** fijá la versión exacta de cada dependencia al instalarla y anotala
 acá la primera vez. No uses rangos `^` en dependencias de producción.
@@ -94,7 +100,7 @@ apps/
   mobile/       Expo
   worker/       procesos pg-boss (comparte código con api)
 packages/
-  contracts/    esquemas Zod + contratos ts-rest. Fuente de verdad de la API
+  contracts/    esquemas Zod + contratos oRPC. Fuente de verdad de la API
   db/           esquema Drizzle, migraciones, seeds
   config/       tsconfig, biome, validación de variables de entorno
 infra/
@@ -154,7 +160,7 @@ apps/api/src/modules/projects/
     create-task/
       create-task.command.ts      entrada, tipada desde packages/contracts
       create-task.handler.ts      la lógica
-      create-task.controller.ts   endpoint ts-rest
+      create-task.controller.ts   endpoint oRPC (@Implement del contrato)
       create-task.spec.ts         test
     reschedule-cascade/
     ...
@@ -185,7 +191,13 @@ Detalle completo en `docs/data-model.md`. Lo mínimo que tenés que respetar sie
 - Claves foráneas compuestas `(organization_id, <id>)`.
 - Orden manual: indexación fraccionaria en `position text`, no enteros.
 - Todo índice de tabla de negocio arranca con `organization_id`.
-- Nombres en `snake_case`, tablas en plural.
+- Nombres en `snake_case`, tablas en **singular** (`task`, `site`,
+  `resource_booking`). Así queda consistente con las tablas de Better Auth
+  (`user`, `session`, `member`), que son singulares y no se pueden renombrar.
+- Toda migración que crea una tabla de negocio nueva termina con
+  `select app_apply_tenant_policies();` (la función vive en la migración
+  `0001_roles_rls`, ver `packages/db/migrations/`). Es idempotente: cubre la
+  tabla nueva sin tener que escribir la policy a mano.
 
 ### El caso de las reservas
 

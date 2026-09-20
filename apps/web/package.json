@@ -1,0 +1,30 @@
+{
+  "name": "@orq/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "next build",
+    "dev": "next dev",
+    "start": "next start",
+    "typecheck": "next typegen && tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "@orpc/client": "1.15.2",
+    "@orpc/contract": "1.15.2",
+    "@orpc/openapi-client": "1.15.2",
+    "@orq/config": "workspace:*",
+    "@orq/contracts": "workspace:*",
+    "next": "16.3.5",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.6",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "typescript": "6.0.3",
+    "vitest": "4.1.11"
+  }
+}

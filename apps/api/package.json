@@ -1,0 +1,40 @@
+{
+  "name": "@orq/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "nest build",
+    "dev": "nest start --watch",
+    "start": "node dist/main.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --config vitest.config.ts",
+    "test:integration": "vitest run --config vitest.integration.config.ts"
+  },
+  "dependencies": {
+    "@nestjs/common": "12.0.3",
+    "@nestjs/core": "12.0.3",
+    "@nestjs/platform-fastify": "12.0.3",
+    "@orpc/nest": "1.15.2",
+    "@orpc/server": "1.15.2",
+    "@orq/config": "workspace:*",
+    "@orq/contracts": "workspace:*",
+    "@orq/db": "workspace:*",
+    "drizzle-orm": "0.45.2",
+    "fastify": "5.12.4",
+    "pg": "8.23.0",
+    "reflect-metadata": "0.2.2",
+    "rxjs": "7.8.2",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "12.0.3",
+    "@nestjs/testing": "12.0.3",
+    "@testcontainers/postgresql": "12.1.0",
+    "@types/node": "24.13.6",
+    "@types/pg": "8.23.1",
+    "testcontainers": "12.1.0",
+    "typescript": "6.0.3",
+    "vitest": "4.1.11"
+  }
+}

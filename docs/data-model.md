@@ -653,15 +653,50 @@ El aislamiento tiene dos capas. La de aplicación (Drizzle agrega `organization_
 
 ```sql
 -- dueño del esquema, corre migraciones, no lo usa la aplicación
-CREATE ROLE app_owner;
+CREATE ROLE app_owner LOGIN PASSWORD '...';
 
--- rol de la aplicación: sin BYPASSRLS, sin ser dueño de las tablas
+-- rol de grupo con los permisos de tabla: sin BYPASSRLS, sin ser dueño de nada
 CREATE ROLE app_user NOLOGIN;
+GRANT USAGE ON SCHEMA public TO app_user;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_user;
-REVOKE UPDATE, DELETE ON audit_log FROM app_user;
+
+-- rol de conexión de la aplicación: hereda los permisos de app_user
+CREATE ROLE app_login LOGIN PASSWORD '...';
+GRANT app_user TO app_login;
+
+ALTER SCHEMA public OWNER TO app_owner;
 ```
 
-Que `app_user` no sea dueño de las tablas es esencial: el dueño de una tabla ignora sus propias policies salvo que se fuerce con `ALTER TABLE ... FORCE ROW LEVEL SECURITY`.
+`app_user` es `NOLOGIN` a propósito: nada se conecta directo con él, así que
+sus permisos siempre pasan por `app_login`, que los hereda (`INHERIT` es el
+default). Que ninguno de los dos sea dueño de las tablas es esencial: el dueño
+de una tabla ignora sus propias policies salvo que se fuerce con
+`ALTER TABLE ... FORCE ROW LEVEL SECURITY`.
+
+`GRANT ... ON ALL TABLES` solo alcanza a las tablas que existen en el momento
+de correrlo. Como las migraciones agregan tablas después, hace falta además:
+
+```sql
+ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_user;
+ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA public
+  GRANT USAGE, SELECT ON SEQUENCES TO app_user;
+```
+
+Los privilegios por defecto se registran por rol **otorgante**. Las
+migraciones corren como `app_owner`, así que el `FOR ROLE app_owner` es
+obligatorio: sin él, el default queda registrado bajo el rol que ejecutó el
+script a mano y no hace nada útil en producción.
+
+`REVOKE UPDATE, DELETE ON audit_log FROM app_user` va en la migración `audit`
+(011), cuando la tabla existe — no en el bootstrap de roles, que corre antes
+de que haya una sola tabla.
+
+Los roles y las extensiones (`btree_gist`, `pg_trgm`, `pgcrypto`, `ltree`) se
+crean en `packages/db/sql/bootstrap-roles.sql`, ejecutado por un superusuario,
+no por una migración de Drizzle: algunas extensiones y la creación de roles
+necesitan privilegios que `app_owner` no tiene, y los passwords de
+`app_owner`/`app_login` no pueden vivir en una migración versionada en git.
 
 ### Policy estándar
 
@@ -889,26 +924,33 @@ Dos notas de contexto argentino: el precio se guarda en las dos monedas porque e
 
 Cada migración de Drizzle es un paso desplegable por separado. El orden respeta las dependencias de claves foráneas y agrupa por módulo, así cada una se puede revisar de una sentada.
 
-| # | Migración | Contenido |
-| --- | --- | --- |
-| 001 | `extensions` | `btree_gist`, `pg_trgm`, `pgcrypto`, `ltree` |
-| 002 | `auth` | Tablas de Better Auth vía su CLI, sin tocar |
-| 003 | `tenancy` | `organization_profile`, `site`, `member_site_access`, `guest_link` |
-| 004 | `roles_rls` | Roles `app_owner` y `app_user`, función generadora de policies |
-| 005 | `projects` | `project`, `task`, triggers de `path` y `version` |
-| 006 | `templates` | `sop_template`, `sop_template_task` |
-| 007 | `custom_fields` | `custom_field_definition`, índices GIN |
-| 008 | `resources` | `resource`, `resource_booking` con la exclusion constraint |
-| 009 | `dependencies` | `task_dependency`, función anti-ciclos, `schedule_change` |
-| 010 | `collaboration` | `task_update`, `attachment`, `task_acknowledgement` |
-| 011 | `audit` | `audit_log` particionada, `audit_trigger()`, `REVOKE` |
-| 012 | `notifications` | `notification`, `notification_preference`, `escalation_policy` |
-| 013 | `sync` | `mutation_log`, publicación lógica, `wal_level` |
-| 014 | `billing` | `plan`, `subscription`, `payment_event`, `usage_counter` |
-| 015 | `analytics` | `project_kpi` materializada y su job de refresco |
-| 016 | `seed` | Planes, plantillas SOP por industria, catálogos iniciales |
+`drizzle-kit` numera desde `0000`, no desde `001`: la columna "Prefijo" es lo
+que realmente aparece en `packages/db/migrations/`. Roles y RLS se adelantaron
+al esqueleto (fase 1, PR de esqueleto y CI) en vez de esperar a `tenancy`: la
+identidad con la que la aplicación se conecta a Postgres es lo que decide si
+RLS protege algo, y postergarlo hubiera significado desarrollar todos los
+slices siguientes contra una conexión que en los hechos ignora las policies.
 
-Las migraciones 001 a 011 son la v1. Las 012 a 016 acompañan las fases posteriores, pero conviene escribirlas al mismo tiempo para que el esquema quede coherente de entrada.
+| Prefijo | Migración | Contenido | Estado |
+| --- | --- | --- | --- |
+| `0000` | `extensions` | `btree_gist`, `pg_trgm`, `pgcrypto`, `ltree` (ya creadas por `bootstrap-roles.sql`; acá con `IF NOT EXISTS`) | Hecha |
+| `0001` | `roles_rls` | Grants a `app_user`, `ALTER DEFAULT PRIVILEGES`, función `app_apply_tenant_policies()` | Hecha |
+| `0002` | `auth` | Tablas de Better Auth vía su CLI, sin tocar | Pendiente |
+| `0003` | `tenancy` | `organization_profile`, `site`, `member_site_access`, `guest_link` | Pendiente |
+| `0004` | `projects` | `project`, `task`, triggers de `path` y `version` | Pendiente |
+| `0005` | `templates` | `sop_template`, `sop_template_task` | Pendiente |
+| `0006` | `custom_fields` | `custom_field_definition`, índices GIN | Pendiente |
+| `0007` | `resources` | `resource`, `resource_booking` con la exclusion constraint | Pendiente |
+| `0008` | `dependencies` | `task_dependency`, función anti-ciclos, `schedule_change` | Pendiente |
+| `0009` | `collaboration` | `task_update`, `attachment`, `task_acknowledgement` | Pendiente |
+| `0010` | `audit` | `audit_log` particionada, `audit_trigger()`, `REVOKE` | Pendiente |
+| `0011` | `notifications` | `notification`, `notification_preference`, `escalation_policy` | Pendiente |
+| `0012` | `sync` | `mutation_log`, publicación lógica, `wal_level` | Pendiente |
+| `0013` | `billing` | `plan`, `subscription`, `payment_event`, `usage_counter` | Pendiente |
+| `0014` | `analytics` | `project_kpi` materializada y su job de refresco | Pendiente |
+| `0015` | `seed` | Planes, plantillas SOP por industria, catálogos iniciales | Pendiente |
+
+`0000` a `0010` son la v1. `0011` a `0015` acompañan las fases posteriores, pero conviene escribirlas al mismo tiempo para que el esquema quede coherente de entrada.
 
 Regla de operación: ninguna migración hace `DROP COLUMN` en el mismo despliegue que deja de usarla. Primero se deja de escribir, se despliega, se verifica, y recién en un despliegue posterior se borra. Con clientes en el campo que corren versiones viejas de la app móvil, esa disciplina es lo que evita cortes.
 

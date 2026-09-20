@@ -1,0 +1,32 @@
+{
+  "name": "orquestacion",
+  "private": true,
+  "version": "0.0.0",
+  "engines": {
+    "node": "24.16.0"
+  },
+  "packageManager": "pnpm@12.4.2",
+  "scripts": {
+    "dev": "turbo run dev",
+    "dev:api": "turbo run dev --filter=@orq/api",
+    "build": "turbo run build",
+    "check": "pnpm check:format && pnpm check:types && pnpm check:boundaries",
+    "check:format": "biome ci .",
+    "check:types": "turbo run typecheck",
+    "check:boundaries": "depcruise apps packages",
+    "fix:format": "biome check --write .",
+    "test": "turbo run test",
+    "test:integration": "turbo run test:integration",
+    "db:generate": "pnpm --filter @orq/db exec drizzle-kit generate",
+    "db:migrate": "pnpm --filter @orq/db run db:migrate",
+    "db:studio": "pnpm --filter @orq/db exec drizzle-kit studio"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.14",
+    "@types/node": "24.13.6",
+    "dependency-cruiser": "18.3.1",
+    "turbo": "2.11.2",
+    "typescript": "6.0.3",
+    "vitest": "4.1.11"
+  }
+}
