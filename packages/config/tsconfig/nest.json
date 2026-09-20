@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "./node.json",
+  "compilerOptions": {
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "strictPropertyInitialization": false,
+    // verbatimModuleSyntax en true elide los `import type`, y entonces
+    // `emitDecoratorMetadata` emite `Object` para ese parámetro del constructor:
+    // Nest falla al arrancar con "can't resolve dependencies" sin decir por qué.
+    "verbatimModuleSyntax": false,
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "outDir": "dist",
+    "rootDir": "src"
+  }
+}
