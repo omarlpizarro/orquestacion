@@ -50,7 +50,7 @@ BEGIN
         AND policyname = rec.table_name || '_tenant_isolation'
     ) THEN
       EXECUTE format(
-        'CREATE POLICY %I ON %I USING (organization_id = current_setting(''app.current_org'', true)::uuid) WITH CHECK (organization_id = current_setting(''app.current_org'', true)::uuid)',
+        'CREATE POLICY %I ON %I USING (organization_id = nullif(current_setting(''app.current_org'', true), '''')::uuid) WITH CHECK (organization_id = nullif(current_setting(''app.current_org'', true), '''')::uuid)',
         rec.table_name || '_tenant_isolation',
         rec.table_name
       );

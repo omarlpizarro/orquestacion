@@ -13,6 +13,14 @@ import { withTenantTransaction } from '../src/transaction.js';
  * que toda consulta reutiliza el mismo backend de Postgres, así que si el
  * contexto de un tenant sobrevive fuera de su transacción, se lo detecta acá.
  * Si alguien borra el `true` en transaction.ts, este test se pone rojo.
+ *
+ * La aserción es "vacío" (`''` o `null`), no estrictamente `null`: la primera
+ * vez que una conexión toca un GUC custom con `set_config(..., true)`,
+ * Postgres deja un placeholder cuyo valor por defecto es `''`, así que tras
+ * el commit/rollback el valor vuelve a `''`, no a `null`, aunque nunca se
+ * hubiera seteado antes en esa conexión. Lo que importa es que no haya
+ * quedado el valor del tenant anterior, no cuál de las dos formas de "vacío"
+ * es.
  */
 describe('contexto de transacción no filtra entre requests', () => {
   let harness: PostgresHarness;
@@ -46,7 +54,7 @@ describe('contexto de transacción no filtra entre requests', () => {
     const result = await db.execute<{ org: string | null }>(
       sql`select current_setting('app.current_org', true) as org`,
     );
-    expect(result.rows[0]?.org).toBeNull();
+    expect(result.rows[0]?.org).toBeFalsy();
   });
 
   it('tras una transacción revertida, el contexto tampoco sobrevive', async () => {
@@ -66,6 +74,6 @@ describe('contexto de transacción no filtra entre requests', () => {
     const result = await db.execute<{ org: string | null }>(
       sql`select current_setting('app.current_org', true) as org`,
     );
-    expect(result.rows[0]?.org).toBeNull();
+    expect(result.rows[0]?.org).toBeFalsy();
   });
 });

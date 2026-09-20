@@ -34,8 +34,8 @@ describe('aislamiento de tenant', () => {
     await harness.ownerDb.execute(sql`alter table tenant_isolation_probe force row level security`);
     await harness.ownerDb.execute(sql`
       create policy tenant_isolation_probe_tenant_isolation on tenant_isolation_probe
-        using (organization_id = current_setting('app.current_org', true)::uuid)
-        with check (organization_id = current_setting('app.current_org', true)::uuid)
+        using (organization_id = nullif(current_setting('app.current_org', true), '')::uuid)
+        with check (organization_id = nullif(current_setting('app.current_org', true), '')::uuid)
     `);
     await harness.ownerDb.execute(
       sql`grant select, insert, update, delete on tenant_isolation_probe to app_user`,
@@ -101,7 +101,7 @@ describe('aislamiento de tenant', () => {
             sql`insert into tenant_isolation_probe (id, organization_id, label) values (${randomUUID()}, ${orgB}, 'colado')`,
           ),
       ),
-    ).rejects.toMatchObject({ code: '42501' });
+    ).rejects.toMatchObject({ cause: { code: '42501' } });
   });
 
   it('una transacción de sistema no ve ninguna fila de tenant', async () => {

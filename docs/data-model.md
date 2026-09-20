@@ -705,11 +705,13 @@ ALTER TABLE task ENABLE ROW LEVEL SECURITY;
 ALTER TABLE task FORCE ROW LEVEL SECURITY;
 
 CREATE POLICY task_tenant_isolation ON task
-  USING      (organization_id = current_setting('app.current_org', true)::uuid)
-  WITH CHECK (organization_id = current_setting('app.current_org', true)::uuid);
+  USING      (organization_id = nullif(current_setting('app.current_org', true), '')::uuid)
+  WITH CHECK (organization_id = nullif(current_setting('app.current_org', true), '')::uuid);
 ```
 
 `USING` filtra lo que se lee, `WITH CHECK` impide escribir una fila de otro tenant. Las dos cláusulas son necesarias; con solo `USING`, un `INSERT` con el `organization_id` equivocado pasa.
+
+El `nullif(..., '')` es obligatorio, no cosmético: la primera vez que una conexión toca un GUC custom como `app.current_org` con `set_config(..., true)`, Postgres registra un placeholder para esa conexión con valor por defecto `''` (no `NULL`). Al terminar esa transacción (commit o rollback), el valor vuelve a `''`, nunca a `NULL`, aunque nunca se hubiera seteado antes en esa conexión. Sin el `nullif`, una transacción de sistema (que no setea `app.current_org`) que reutiliza una conexión del pool ya tocada por una transacción de tenant revienta con `22P02` (cast de `''` a `uuid`) en vez de simplemente no ver ninguna fila.
 
 La misma policy se aplica a todas las tablas con `organization_id`. Conviene generarla en la migración recorriendo el catálogo, no escribirla 25 veces a mano.
 

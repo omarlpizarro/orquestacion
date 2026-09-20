@@ -49,3 +49,12 @@ grant app_user to app_login;
 -- todo; app_login nunca puede saltarse una policy porque no es dueño de nada
 -- y no tiene BYPASSRLS.
 alter schema public owner to app_owner;
+
+-- CREATE de esquema es un privilegio de base de datos, no de schema: sin
+-- esto, app_owner no puede crear el esquema "drizzle" que trackea las
+-- migraciones (Postgres 15+ ya no lo regala vía PUBLIC).
+do $$
+begin
+  execute format('grant create on database %I to app_owner', current_database());
+end
+$$;
