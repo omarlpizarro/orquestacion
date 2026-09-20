@@ -33,7 +33,7 @@ export class GetHealthHandler {
         select
           current_user as connected_as,
           (now() at time zone 'utc')::text as server_time_utc,
-          (current_setting('app.current_org', true) is null) as org_unset
+          (nullif(current_setting('app.current_org', true), '') is null) as org_unset
       `);
       return result.rows[0];
     });
