@@ -11,6 +11,7 @@ import type { Auth } from '../src/shared/auth/build-auth.js';
 import { mountBetterAuth } from '../src/shared/auth/mount-better-auth.js';
 import { DB } from '../src/shared/database/database.tokens.js';
 import { resolveTenantIdentity } from '../src/shared/request-context/request-context.middleware.js';
+import { addMemberWithRole } from './helpers/add-member-with-role.js';
 import { signUpAndCreateOrg } from './helpers/sign-up-and-create-org.js';
 
 /**
@@ -22,6 +23,7 @@ import { signUpAndCreateOrg } from './helpers/sign-up-and-create-org.js';
 describe('POST /projects/tasks (integración)', () => {
   let harness: PostgresHarness;
   let app: NestFastifyApplication;
+  let auth: Auth;
   let db: Db;
   let organizationId: string;
   let memberId: string;
@@ -38,7 +40,7 @@ describe('POST /projects/tasks (integración)', () => {
     app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter(), {
       logger: false,
     });
-    const auth = app.get<Auth>(AUTH);
+    auth = app.get<Auth>(AUTH);
     db = app.get<Db>(DB);
     mountBetterAuth(app, auth);
     await app.init();
@@ -165,9 +167,9 @@ describe('POST /projects/tasks (integración)', () => {
     expect(response.json().data).toMatchObject({ domain_code: 'project_not_found' });
   });
 
-  it('crea una subtarea con path bajo la del padre', async () => {
+  it('crea una subtarea un nivel más profunda que su padre', async () => {
     const parentId = newId();
-    await post({
+    const parent = await post({
       client_mutation_id: newId(),
       id: parentId,
       project_id: projectId,
@@ -184,6 +186,7 @@ describe('POST /projects/tasks (integración)', () => {
 
     expect(child.statusCode, child.body).toBe(200);
     expect(child.json().parent_task_id).toBe(parentId);
+    expect(child.json().depth).toBe(parent.json().depth + 1);
   });
 
   it('responde NOT_FOUND si la tarea padre no existe', async () => {
@@ -223,5 +226,56 @@ describe('POST /projects/tasks (integración)', () => {
 
     expect(fourthLevel.statusCode).toBe(422);
     expect(fourthLevel.json().data).toMatchObject({ domain_code: 'max_depth_exceeded' });
+  });
+
+  it('responde FORBIDDEN si un operator intenta crear una tarea', async () => {
+    const operator = await addMemberWithRole(app, auth, {
+      organizationId,
+      role: 'operator',
+      label: 'Capataz Norte',
+    });
+
+    const response = await app
+      .getHttpAdapter()
+      .getInstance()
+      .inject({
+        method: 'POST',
+        url: '/projects/tasks',
+        headers: { cookie: operator.cookie },
+        payload: {
+          client_mutation_id: newId(),
+          id: newId(),
+          project_id: projectId,
+          title: 'Tarea que un operator no debería poder crear',
+        },
+      });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json().data).toMatchObject({ domain_code: 'task_create_forbidden' });
+  });
+
+  it('un manager sí puede crear tareas', async () => {
+    const manager = await addMemberWithRole(app, auth, {
+      organizationId,
+      role: 'manager',
+      label: 'Jefe de Obra Sur',
+    });
+
+    const response = await app
+      .getHttpAdapter()
+      .getInstance()
+      .inject({
+        method: 'POST',
+        url: '/projects/tasks',
+        headers: { cookie: manager.cookie },
+        payload: {
+          client_mutation_id: newId(),
+          id: newId(),
+          project_id: projectId,
+          title: 'Tarea creada por un manager',
+        },
+      });
+
+    expect(response.statusCode, response.body).toBe(200);
   });
 });

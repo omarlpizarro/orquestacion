@@ -7,7 +7,7 @@ export interface SignedUpOrg {
   organizationId: string;
 }
 
-function extractSessionCookie(setCookie: string | string[] | undefined): string {
+export function extractSessionCookie(setCookie: string | string[] | undefined): string {
   const values = Array.isArray(setCookie) ? setCookie : setCookie ? [setCookie] : [];
   const sessionCookie = values.find((value) => value.startsWith('better-auth.session_token='));
   if (!sessionCookie) {

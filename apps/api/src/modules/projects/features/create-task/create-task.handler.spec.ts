@@ -6,6 +6,7 @@ import { runWithRequestContext } from '../../../../shared/request-context/reques
 import type { TenancyService } from '../../../tenancy/tenancy.module.js';
 import { ParentTaskNotFoundError } from '../../domain/errors/parent-task-not-found.error.js';
 import { ProjectNotFoundError } from '../../domain/errors/project-not-found.error.js';
+import { TaskCreateForbiddenError } from '../../domain/errors/task-create-forbidden.error.js';
 import { TaskDepthExceededError } from '../../domain/errors/task-depth-exceeded.error.js';
 import {
   findLastSiblingPosition,
@@ -30,7 +31,7 @@ vi.mock('../../infrastructure/task.repository.js', () => ({
   findTaskById: vi.fn(),
 }));
 
-const tenant = { organizationId: 'org_abc123', memberId: 'member_abc123' };
+const tenant = { organizationId: 'org_abc123', memberId: 'member_abc123', role: 'owner' };
 
 const baseCommand: CreateTaskCommand = {
   client_mutation_id: '01945f4e-0000-7000-8000-000000000000',
@@ -44,7 +45,7 @@ const insertedTask: TaskRow = {
   organizationId: tenant.organizationId,
   projectId: baseCommand.project_id,
   parentTaskId: null,
-  path: '019450000000700080000000001'.replaceAll('-', ''),
+  depth: 1,
   title: baseCommand.title,
   description: null,
   status: 'pending',
@@ -92,7 +93,7 @@ describe('CreateTaskHandler', () => {
       id: insertedTask.id,
       project_id: insertedTask.projectId,
       parent_task_id: null,
-      path: insertedTask.path,
+      depth: insertedTask.depth,
       title: insertedTask.title,
       description: null,
       status: 'pending',
@@ -194,5 +195,62 @@ describe('CreateTaskHandler', () => {
     await expect(
       runWithRequestContext({ requestId: 'req-1' }, () => handler.execute(baseCommand)),
     ).rejects.toThrow(/sesión con organización activa/);
+  });
+
+  it('rechaza con TaskCreateForbiddenError si el rol no tiene la capacidad task:create', async () => {
+    const handler = buildHandler();
+    const operator = { ...tenant, role: 'operator' };
+
+    await expect(
+      runWithRequestContext({ requestId: 'req-1', tenant: operator }, () =>
+        handler.execute(baseCommand),
+      ),
+    ).rejects.toBeInstanceOf(TaskCreateForbiddenError);
+    expect(insertTask).not.toHaveBeenCalled();
+  });
+
+  it('permite crear la tarea a un manager (tiene task:create)', async () => {
+    const handler = buildHandler();
+    const manager = { ...tenant, role: 'manager' };
+
+    const result = await runWithRequestContext({ requestId: 'req-1', tenant: manager }, () =>
+      handler.execute(baseCommand),
+    );
+
+    expect(result.id).toBe(insertedTask.id);
+  });
+
+  it('si insertTask choca con una violación de unicidad (dos requests con el mismo client_mutation_id a la vez), relee la mutación anterior en vez de romper con un 500 opaco', async () => {
+    const uniqueViolation = Object.assign(
+      new Error('duplicate key value violates unique constraint "task_pkey"'),
+      { code: '23505' },
+    );
+    vi.mocked(insertTask).mockRejectedValueOnce(uniqueViolation);
+    vi.mocked(findPriorMutation)
+      // primer intento: todavía no ve la mutación que la otra request está por confirmar
+      .mockResolvedValueOnce(null)
+      // segunda pasada, ya en una transacción nueva: la otra request ya commiteó
+      .mockResolvedValueOnce({
+        entityId: insertedTask.id,
+        result: 'applied',
+        rejectionReason: null,
+      });
+    vi.mocked(findTaskById).mockResolvedValue(insertedTask);
+    const handler = buildHandler();
+
+    const result = await run<{ id: string }>(baseCommand, handler);
+
+    expect(result.id).toBe(insertedTask.id);
+  });
+
+  it('si la violación de unicidad no corresponde a ninguna mutación ya resuelta, relanza el error original en vez de disfrazarlo', async () => {
+    const uniqueViolation = Object.assign(new Error('otra restricción unique cualquiera'), {
+      code: '23505',
+    });
+    vi.mocked(insertTask).mockRejectedValueOnce(uniqueViolation);
+    vi.mocked(findPriorMutation).mockResolvedValue(null);
+    const handler = buildHandler();
+
+    await expect(run(baseCommand, handler)).rejects.toBe(uniqueViolation);
   });
 });

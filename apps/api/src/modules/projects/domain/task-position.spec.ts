@@ -17,6 +17,34 @@ describe('nextTaskPosition (agregar al final)', () => {
     expect(positions).toEqual(sorted);
     expect(new Set(positions).size).toBe(positions.length);
   });
+
+  it('resuelve incrementando la parte entera (a0, a1, …, az, b00), no concatenando', () => {
+    let last: string | null = null;
+    const positions: string[] = [];
+    for (let i = 0; i < 64; i++) {
+      last = nextTaskPosition(last);
+      positions.push(last);
+    }
+    expect(positions.slice(0, 3)).toEqual(['a0', 'a1', 'a2']);
+    // az es la posición 61 (a0..az son 62 valores: a + un dígito base62).
+    expect(positions[61]).toBe('az');
+    expect(positions[62]).toBe('b00');
+    expect(positions[63]).toBe('b01');
+  });
+
+  it('después de 1000 agregados seguidos, ninguna posición supera los 10 caracteres', () => {
+    // La versión que buscaba el punto medio contra "infinito" gastaba la
+    // mitad del espacio libre en cada agregado (U, k, s, w, y, z, zV, ...):
+    // un carácter nuevo cada ~6 tareas, así que 600 tareas ya daban
+    // posiciones de ~100 caracteres. Incrementar la parte entera en vez de
+    // buscarle el punto medio al infinito crece un carácter cada ~62² a
+    // ~62³ agregados, así que 1000 ni siquiera sale de largo 3.
+    let last: string | null = null;
+    for (let i = 0; i < 1000; i++) {
+      last = nextTaskPosition(last);
+      expect(last.length).toBeLessThanOrEqual(10);
+    }
+  });
 });
 
 describe('generateKeyBetween (insertar entre dos)', () => {

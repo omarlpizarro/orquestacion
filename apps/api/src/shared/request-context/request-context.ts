@@ -4,6 +4,8 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 export interface TenantIdentity {
   organizationId: string;
   memberId: string;
+  /** Rol(es) de Better Auth para este miembro en `organizationId`, separados por coma si tiene más de uno. Ver `shared/auth/access-control.ts#hasCapability`. */
+  role: string;
 }
 
 export interface RequestContext {

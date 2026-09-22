@@ -1,10 +1,12 @@
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http';
-import { Inject, Injectable, type NestMiddleware } from '@nestjs/common';
+import { Inject, Injectable, Logger, type NestMiddleware } from '@nestjs/common';
 import { idSchema, newId } from '@orq/contracts';
 import { fromNodeHeaders } from 'better-auth/node';
 import { AUTH } from '../auth/auth.tokens.js';
 import type { Auth } from '../auth/build-auth.js';
 import { runWithRequestContext, type TenantIdentity } from './request-context.js';
+
+const logger = new Logger('RequestContextMiddleware');
 
 const REQUEST_ID_HEADER = 'x-request-id';
 
@@ -46,8 +48,12 @@ export async function resolveTenantIdentity(
     if (!session?.session.activeOrganizationId) return undefined;
 
     const member = await auth.api.getActiveMember({ headers: fetchHeaders });
-    return { organizationId: member.organizationId, memberId: member.id };
-  } catch {
+    return { organizationId: member.organizationId, memberId: member.id, role: member.role };
+  } catch (error) {
+    logger.error(
+      'No se pudo resolver la identidad del tenant, se trata como request anónimo',
+      error,
+    );
     return undefined;
   }
 }

@@ -30,7 +30,12 @@ export const taskOutputSchema = z.object({
   id: idSchema,
   project_id: idSchema,
   parent_task_id: idSchema.nullable(),
-  path: z.string(),
+  // No el `path` de ltree crudo: es representación interna y el cliente no
+  // puede hacer nada útil con su formato. `depth` es `nlevel(path)` (la
+  // raíz es 1, ver domain/max-task-depth.ts y ADR-006) — lo que un cliente
+  // necesita para indentar o para saber cuánto le queda hasta el límite de
+  // tres niveles, sin atar el contrato público a ltree.
+  depth: z.int().min(1),
   title: z.string(),
   description: z.string().nullable(),
   status: z.literal('pending'),

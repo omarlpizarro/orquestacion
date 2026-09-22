@@ -46,7 +46,7 @@ describe('taskOutputSchema', () => {
       id: '01945f4e-0000-7000-8000-000000000002',
       project_id: validInput.project_id,
       parent_task_id: null,
-      path: '01945f4e00007000800000000002',
+      depth: 1,
       title: validInput.title,
       description: null,
       status: 'pending',

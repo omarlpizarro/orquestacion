@@ -16,7 +16,8 @@ export interface TaskRow {
   organizationId: string;
   projectId: string;
   parentTaskId: string | null;
-  path: string;
+  /** `nlevel(path)`, no el `ltree` crudo — ver `taskOutputSchema.depth`. */
+  depth: number;
   title: string;
   description: string | null;
   status: string;
@@ -36,7 +37,7 @@ interface TaskRowSql extends Record<string, unknown> {
   organization_id: string;
   project_id: string;
   parent_task_id: string | null;
-  path: string;
+  depth: number;
   title: string;
   description: string | null;
   status: string;
@@ -52,9 +53,17 @@ interface TaskRowSql extends Record<string, unknown> {
 }
 
 /**
- * `pg` devuelve `timestamptz` como texto en el formato nativo de Postgres
- * (`2026-09-20 21:28:47.564719+00`), no como ISO 8601. `new Date(...)` lo
- * entiende igual, así que solo hace falta normalizar antes de que
+ * Verificado contra el driver, no supuesto: por default `pg` sí parsea
+ * `timestamptz` a `Date` (`pg-types`, OID 1184 → `parseDate`), pero
+ * `drizzle-orm/node-postgres` pisa ese parser a propósito — ver
+ * `node_modules/drizzle-orm/node-postgres/session.js`,
+ * `rawQueryConfig.types.getTypeParser`, que para `TIMESTAMPTZ`/
+ * `TIMESTAMP`/`DATE`/`INTERVAL` (y sus variantes array) devuelve
+ * `(val) => val` en vez de parsear. Por eso `tx.execute(sql\`...\`)`
+ * entrega el texto nativo de Postgres (`2026-09-20 21:28:47.564719+00`),
+ * nunca un `Date` — confirmado además a mano contra el harness
+ * (`typeof row.created_at === 'string'`). `new Date(...)` lo entiende
+ * igual, así que solo hace falta normalizar antes de que
  * `taskOutputSchema` (que exige ISO estricto) lo valide.
  */
 function toIsoOrNull(value: string | null): string | null {
@@ -67,7 +76,7 @@ function mapTaskRow(row: TaskRowSql): TaskRow {
     organizationId: row.organization_id,
     projectId: row.project_id,
     parentTaskId: row.parent_task_id,
-    path: row.path,
+    depth: row.depth,
     title: row.title,
     description: row.description,
     status: row.status,
@@ -143,7 +152,9 @@ export interface InsertTaskParams {
  * `path` no se manda: lo llena `task_maintain_path()` (trigger de
  * `0005_projects.sql`) a partir de `parent_task_id`. `RETURNING *` porque
  * el trigger y los defaults de columna (`status`, `version`, `created_at`)
- * son la fuente de verdad, no lo que mandó el cliente.
+ * son la fuente de verdad, no lo que mandó el cliente — se le agrega
+ * `nlevel(path) as depth` porque el `ltree` crudo no sale de esta capa
+ * (ver `taskOutputSchema.depth`).
  */
 export async function insertTask(tx: Tx, params: InsertTaskParams): Promise<TaskRow> {
   const result = await tx.execute<TaskRowSql>(sql`
@@ -157,7 +168,7 @@ export async function insertTask(tx: Tx, params: InsertTaskParams): Promise<Task
       ${params.assigneeMemberId}, ${params.plannedStartAtUtc}, ${params.plannedEndAtUtc},
       ${params.isMilestone}, ${params.ackRequired}, ${params.position}
     )
-    returning *
+    returning *, nlevel(path) as depth
   `);
   const row = result.rows[0];
   if (!row) throw new Error('insertTask no devolvió ninguna fila');
@@ -169,7 +180,7 @@ export async function findTaskById(
   params: { organizationId: string; taskId: string },
 ): Promise<TaskRow | null> {
   const result = await tx.execute<TaskRowSql>(
-    sql`select * from task where id = ${params.taskId} and organization_id = ${params.organizationId}`,
+    sql`select *, nlevel(path) as depth from task where id = ${params.taskId} and organization_id = ${params.organizationId}`,
   );
   const row = result.rows[0];
   return row ? mapTaskRow(row) : null;

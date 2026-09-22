@@ -3,6 +3,27 @@ import { fromNodeHeaders } from 'better-auth/node';
 import type { Auth } from './build-auth.js';
 
 /**
+ * `Headers#forEach` junta todos los `Set-Cookie` repetidos en un solo valor
+ * separado por comas (rompe cookies con `Expires`, que ya trae comas) — para
+ * eso existe `getSetCookie()`, que los devuelve separados. `setHeader` recibe
+ * un array para `set-cookie` justamente para poder emitir varias líneas
+ * `Set-Cookie` reales en vez de una sola corrupta.
+ */
+export function copyResponseHeaders(
+  headers: Headers,
+  setHeader: (name: string, value: string | string[]) => void,
+): void {
+  const setCookies = headers.getSetCookie();
+  if (setCookies.length > 0) {
+    setHeader('set-cookie', setCookies);
+  }
+  headers.forEach((value, key) => {
+    if (key.toLowerCase() === 'set-cookie') return;
+    setHeader(key, value);
+  });
+}
+
+/**
  * Better Auth se monta como ruta plana de Fastify, no como controller de
  * Nest: es una superficie REST propia (ADR-005 la deja fuera de oRPC a
  * propósito). No se usa `toNodeHandler` porque leería `request.raw` después
@@ -26,9 +47,7 @@ export function mountBetterAuth(app: NestFastifyApplication, auth: Auth): void {
       const response = await auth.handler(req);
 
       reply.status(response.status);
-      response.headers.forEach((value, key) => {
-        reply.header(key, value);
-      });
+      copyResponseHeaders(response.headers, (name, value) => reply.header(name, value));
       reply.send(response.body ? await response.text() : null);
     });
 }
