@@ -9,6 +9,12 @@ export const serverEnvSchema = z.object({
   // Con qué rol se espera que `DATABASE_URL` conecte. `health` lo compara
   // contra `current_user`: si no coinciden, la base está mal configurada.
   DATABASE_APP_ROLE: z.string().default('app_login'),
+  // Better Auth: firma cookies de sesión y tokens. Nunca el mismo valor entre
+  // ambientes; rotarlo invalida toda sesión activa.
+  BETTER_AUTH_SECRET: z.string().min(32),
+  // Base URL pública de la API, para los links que Better Auth genera
+  // (verificación de email, callbacks de OAuth).
+  BETTER_AUTH_URL: z.url(),
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;

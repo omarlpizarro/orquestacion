@@ -1,7 +1,15 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
+/** `organizationId`/`memberId` de Better Auth: siempre `text`, nunca `uuid` (ADR-010). */
+export interface TenantIdentity {
+  organizationId: string;
+  memberId: string;
+}
+
 export interface RequestContext {
   requestId: string;
+  /** `undefined` si el request no tiene sesión con organización activa (endpoints públicos, guest_link, health). */
+  tenant?: TenantIdentity | undefined;
 }
 
 const storage = new AsyncLocalStorage<RequestContext>();

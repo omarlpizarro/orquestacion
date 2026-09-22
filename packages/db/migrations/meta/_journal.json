@@ -15,6 +15,34 @@
       "when": 1789860188510,
       "tag": "0001_roles_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789936306873,
+      "tag": "0002_auth",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1789937079937,
+      "tag": "0003_tenancy",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1789938609027,
+      "tag": "0004_mutation_log",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1789938634414,
+      "tag": "0005_projects",
+      "breakpoints": true
     }
   ]
 }

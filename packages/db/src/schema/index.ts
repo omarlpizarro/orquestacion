@@ -1,3 +1,5 @@
-// Barrel del esquema Drizzle. Vacío hasta la migración `tenancy` (0002+):
-// este incremento solo trae extensiones y roles, sin tablas de negocio todavía.
-export {};
+// Barrel del esquema Drizzle.
+export * from './auth/schema.js';
+export * from './projects/schema.js';
+export * from './sync/schema.js';
+export * from './tenancy/schema.js';
