@@ -71,6 +71,7 @@ CREATE INDEX "task_org_project_position_idx" ON "task" USING btree ("organizatio
 CREATE OR REPLACE FUNCTION app_bump_version() RETURNS trigger AS $$
 BEGIN
   NEW.version := OLD.version + 1;
+  NEW.updated_at := now();
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
@@ -133,8 +134,15 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- Solo BEFORE INSERT a propósito: esta función recalcula el path de la fila
+-- que dispara el trigger, pero no el de sus descendientes. Si además
+-- corriera en UPDATE OF parent_task_id (mover una tarea de padre), el path
+-- de la fila movida quedaría bien pero el de sus subtareas quedaría con el
+-- prefijo viejo, inconsistente en silencio — peor que no manejar el caso.
+-- Hasta que exista el slice que mueve tareas (que va a necesitar actualizar
+-- el subárbol completo, no solo la fila), no se maneja UPDATE acá.
 CREATE TRIGGER task_maintain_path
-  BEFORE INSERT OR UPDATE OF parent_task_id ON task
+  BEFORE INSERT ON task
   FOR EACH ROW EXECUTE FUNCTION task_maintain_path();
 
 SELECT app_apply_tenant_policies();

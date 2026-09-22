@@ -24,6 +24,8 @@ Alcance de la fase. Entra: CRUD de proyectos, CRUD de tareas y subtareas, asigna
 
 No entra, aunque el modelado lo sugiera: dependencias entre tareas, hitos, reprogramación en cascada, instanciación de plantillas SOP, campos personalizados, Gantt y analytics. Si aparecen en un PR es scope creep, aunque el código esté bien.
 
+Alcance por sitio, pendiente y explícito: `task:create` (agregado en PR 1) no consulta `member_site_access` — hoy un manager puede crear tareas en proyectos de cualquier sitio de la organización, no solo los que tiene asignados. Es un agujero de autorización real, no un detalle. Tiene que resolverse antes de cerrar la fase, junto con cualquier otra capacidad de `manager` que la revisión de cada PR identifique con el mismo problema — no alcanza con resolverlo solo para `task:create` si aparecen más.
+
 Requisitos transversales de cada slice. Ninguno se da por terminado sin esto:
 
 Acepta client_mutation_id.
@@ -35,11 +37,11 @@ No importa esquema Drizzle ni tablas de otro módulo.
 
 Zonas horarias. El usuario elige "martes a las 8" en la hora del sitio y eso se guarda en UTC. Resolvelo explícitamente en el slice de referencia, con test, porque si sale mal ahí sale mal en todo el sistema.
 
-Seed y rendimiento. Armá un seed de volumen realista: 50 organizaciones con unas 500 tareas cada una, repartidas entre las industrias objetivo. La consulta de "Mi Día" necesita un test que afirme que el plan de ejecución usa el índice compuesto (organization_id, assignee_member_id, status, planned_end_at). Verificarlo con diez filas no prueba nada.
+Seed y rendimiento. Armá un seed de volumen realista: 50 organizaciones con unas 500 tareas cada una, repartidas entre las industrias objetivo. La consulta de "Mi Día" necesita un test que afirme que el plan de ejecución usa el índice compuesto (organization_id, assignee_member_id, status, planned_end_at). Verificarlo con diez filas no prueba nada. Mismo tratamiento para (organization_id, project_id, parent_task_id), que necesita findLastSiblingPosition (create-task, PR 1) — falta desde ese PR, se agrega acá en vez de en su propio PR para no crear una migración que solo agrega un índice.
 
 Cómo trabajar. Un slice por PR; si un PR toca domain/ más cuatro features, dividilo. Ante cualquier ambigüedad, pará y planteámela con las opciones y su evidencia, como hiciste con el singular/plural y con las peer dependencies. Si una decisión de la tabla de stack está bloqueada por un hecho verificable, decilo: eso no es redebatir, es lo que quiero que hagas.
 
 Empezá por el PR 1 y avisame cuando esté para revisar.
 
 Finalment
-La fase 2 está completa cuando: existe un proyecto con tareas y subtareas creadas desde la API, un operativo ve sus tareas del día en móvil y puede cambiarles el estado, un bloqueo genera novedad y notificación, el audit trail registra todos esos cambios, el test de aislamiento de tenant pasa con la identidad de producción, la consulta de "Mi Día" usa el índice bajo el seed de volumen, y pnpm check && pnpm test está en verde.
+La fase 2 está completa cuando: existe un proyecto con tareas y subtareas creadas desde la API, un operativo ve sus tareas del día en móvil y puede cambiarles el estado, un bloqueo genera novedad y notificación, el audit trail registra todos esos cambios, el test de aislamiento de tenant pasa con la identidad de producción, la consulta de "Mi Día" usa el índice bajo el seed de volumen, el scoping por sitio (member_site_access) se aplica a todas las capacidades de manager que lo necesitan, y pnpm check && pnpm test está en verde.

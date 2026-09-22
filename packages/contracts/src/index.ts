@@ -17,6 +17,7 @@ export {
   createTaskInputSchema,
   type TaskOutput,
   taskOutputSchema,
+  taskStatusSchema,
 } from './projects/create-task.contract.js';
 export { base, domainErrorData, withClientMutationId } from './shared/base.contract.js';
 export { idSchema, newId } from './shared/id.js';

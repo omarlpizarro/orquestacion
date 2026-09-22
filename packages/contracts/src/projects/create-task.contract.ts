@@ -26,6 +26,20 @@ export const createTaskInputSchema = withClientMutationId(
 );
 export type CreateTaskInput = z.infer<typeof createTaskInputSchema>;
 
+// `task_status_check` en 0005_projects.sql. Se define acá (no en el PR de
+// la máquina de estados) para que ese PR no tenga que ampliar el contrato
+// público: create-task siempre devuelve 'pending', pero cualquier cliente
+// que ya integró contra este contrato tiene que aceptar los otros estados
+// desde ahora, no el día que exista el primer endpoint que los devuelva.
+export const taskStatusSchema = z.enum([
+  'pending',
+  'in_progress',
+  'blocked',
+  'in_review',
+  'done',
+  'cancelled',
+]);
+
 export const taskOutputSchema = z.object({
   id: idSchema,
   project_id: idSchema,
@@ -38,7 +52,7 @@ export const taskOutputSchema = z.object({
   depth: z.int().min(1),
   title: z.string(),
   description: z.string().nullable(),
-  status: z.literal('pending'),
+  status: taskStatusSchema,
   criticality: z.enum(['low', 'normal', 'high', 'critical']),
   assignee_member_id: memberIdSchema.nullable(),
   planned_start_at: z.iso.datetime().nullable(),

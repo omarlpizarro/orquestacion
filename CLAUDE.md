@@ -369,6 +369,12 @@ Confirmar antes de implementar lo que dependa de ellas:
    un fallback para cuando es nulo (`organization_profile.timezone` para
    resolver la zona horaria de una tarea, ver ADR-008), no resolvió la
    pregunta de si debería ser `NOT NULL`.
+6. Idempotencia de mutaciones con payload distinto bajo el mismo
+   `client_mutation_id`: hoy `mutation_log` no guarda un hash del request, así
+   que un reintento con el mismo `client_mutation_id` pero datos distintos
+   devuelve el resultado anterior en silencio, sin avisar del mismatch. Falta
+   decidir si eso alcanza (es la semántica que ADR-007 ya documenta) o si hace
+   falta guardar un hash del payload y rechazar el reintento si no coincide.
 
 ---
 

@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { createTaskInputSchema, taskOutputSchema } from './create-task.contract.js';
+import {
+  createTaskInputSchema,
+  taskOutputSchema,
+  taskStatusSchema,
+} from './create-task.contract.js';
 
 const validInput = {
   client_mutation_id: '01945f4e-0000-7000-8000-000000000000',
@@ -61,5 +65,15 @@ describe('taskOutputSchema', () => {
       created_at: '2026-09-20T00:00:00.000Z',
     });
     expect(result.success).toBe(true);
+  });
+
+  it('acepta cualquier estado del enum completo, no solo pending (para que el PR de la máquina de estados no tenga que ampliar el contrato)', () => {
+    for (const status of taskStatusSchema.options) {
+      expect(taskStatusSchema.safeParse(status).success).toBe(true);
+    }
+  });
+
+  it('rechaza un estado que no existe', () => {
+    expect(taskStatusSchema.safeParse('archived').success).toBe(false);
   });
 });
