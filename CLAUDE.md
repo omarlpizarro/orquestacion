@@ -342,6 +342,13 @@ doblemente reservado, una alerta que no llega a un frente de mina).
 **Si necesitás una decisión de arquitectura nueva:** proponela, esperá confirmación,
 y una vez aprobada escribila como ADR en `docs/adr/` antes de implementarla.
 
+**Si aparece un prerequisito que el brief no contemplaba** (por ejemplo, asumía
+resuelta una fase anterior y no lo estaba): va en su propio PR, separado del
+trabajo que lo necesita, y se mergea antes. No se mezclan en el mismo PR aunque
+se hayan construido en la misma sesión — revisar "¿está bien esta base?" y
+"¿está bien esta feature?" son dos preguntas distintas, y mezclarlas hace más
+difícil revisar cualquiera de las dos a fondo.
+
 **Nunca:** agregues dependencias sin preguntar, cambies el esquema sin actualizar
 `docs/data-model.md`, desactives un test que falla, ni uses `--force` en migraciones.
 

@@ -108,6 +108,26 @@ describe('auth + tenancy (integración)', () => {
     expect(seenByB.rows).toEqual([{ organization_id: tenantB.organizationId }]);
   });
 
+  it('nadie puede leer las membresías de una organización ajena: sin RLS en auth.member (ADR-011), el aislamiento depende solo del código', async () => {
+    const orgA = await signUpAndCreateOrg(app, 'Org Cinco');
+    const orgB = await signUpAndCreateOrg(app, 'Org Seis');
+    const fastify = app.getHttpAdapter().getInstance();
+
+    // Better Auth expone `list-members` con un `organizationId` que el
+    // caller elige — no necesariamente el de su sesión activa. Si el
+    // código que lo resuelve no verificara la membresía del que pregunta,
+    // esto devolvería las membresías de orgB sin que ninguna policy de
+    // base lo frenara: `auth.member` no tiene `organization_id` bajo RLS.
+    const response = await fastify.inject({
+      method: 'GET',
+      url: `/api/auth/organization/list-members?organizationId=${orgB.organizationId}`,
+      headers: { cookie: orgA.cookie },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.json()).not.toHaveProperty('members');
+  });
+
   it('las tablas de Better Auth (esquema auth) no tienen RLS: ADR-011', async () => {
     const result = await app.get<Db>(DB).execute<{ relname: string; rls_enabled: boolean }>(sql`
       select c.relname, c.relrowsecurity as rls_enabled

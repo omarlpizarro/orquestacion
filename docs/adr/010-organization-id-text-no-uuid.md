@@ -74,11 +74,25 @@ que falte la FK — es que la columna no puede ni guardar el valor.
 
 ## Alternativas descartadas
 
-- **Forzar a Better Auth a generar IDs `uuid`.** Requiere: (1) sobreescribir
-  `generateId` con un generador UUIDv7 propio vía
-  `advanced.database.generateId`, y (2) reemplazar el `schema.ts` que genera
-  la CLI por columnas `uuid` a mano. Descartada porque el punto (2)
-  contradice directamente CLAUDE.md §7 ("Tablas generadas por su CLI, no se
-  editan a mano") y porque cada `auth generate` futuro (nuevo plugin, nueva
-  versión) volvería a generar `text` y habría que reaplicar el override a
-  mano — un costo recurrente, no uno solo.
+- **Forzar a Better Auth a generar IDs `uuid`.** Verificado que
+  `better-auth@1.7.5` sí permite inyectar un generador de IDs propio: la
+  opción `advanced.database.generateId` acepta `"uuid"` (usa
+  `crypto.randomUUID()`), `"serial"`, `false`, o una función
+  `({ model, size }) => string` — ver
+  `node_modules/better-auth/dist/context/create-context.mjs` (función
+  `generateIdFunc`, resuelve `options.advanced?.database?.generateId` antes
+  de caer al generador opaco por defecto) y el comentario propio del tipo en
+  `node_modules/better-auth/dist/plugins/organization/types.d.mts:167-176`,
+  que documenta el flujo con invitaciones para
+  `advanced.database.generateId: "uuid"` explícitamente. No es una opción
+  hipotética: existe y está tipada en la versión que usamos.
+  Descartada de todos modos porque tomar ese camino requiere además
+  reemplazar el `schema.ts` que genera la CLI por columnas `uuid` a mano
+  (`crypto.randomUUID()` no es UUIDv7, así que ni siquiera resolvería del
+  todo la regla dura 6 de un saque) — eso contradice CLAUDE.md §7 ("Tablas
+  generadas por su CLI, no se editan a mano"), y cada `auth generate` futuro
+  (nuevo plugin, nueva versión) volvería a generar `text` y habría que
+  reaplicar el override a mano, un costo recurrente y no uno solo. La
+  conclusión no cambia — `organization_id` sigue siendo `text` — pero la
+  razón es un costo de mantenimiento asumido a propósito, no una limitación
+  de Better Auth.

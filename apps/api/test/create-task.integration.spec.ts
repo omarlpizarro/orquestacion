@@ -112,9 +112,13 @@ describe('POST /projects/tasks (integración)', () => {
       status: 'pending',
       criticality: 'normal',
       parent_task_id: null,
-      position: 'a0',
       version: 1,
     });
+    // El valor exacto de la primera posición es un detalle de
+    // `generateKeyBetween` (domain/task-position.ts), no un contrato: solo
+    // nos importa que exista y que ordene, no cuál es.
+    expect(typeof body.position).toBe('string');
+    expect(body.position.length).toBeGreaterThan(0);
     expect(await countTasksWithTitle('Excavar cimientos')).toBe(1);
   });
 
