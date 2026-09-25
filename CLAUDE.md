@@ -210,6 +210,20 @@ Detalle completo en `docs/data-model.md`. Lo mínimo que tenés que respetar sie
   `no-cross-module-schema`): si un módulo importara el objeto de tabla de
   otro para usar el query builder, la regla lo bloquea recién ahí, pero con
   SQL crudo el problema ni se plantea — nada que importar.
+- **Un `CHECK` o una `FOREIGN KEY` nueva sobre una tabla que ya tiene datos
+  va con `ADD CONSTRAINT ... NOT VALID`, seguido de un `VALIDATE CONSTRAINT`
+  aparte.** `DROP CONSTRAINT` + `ADD CONSTRAINT` (lo que genera
+  `drizzle-kit` por default para modificar un `CHECK`) toma un lock
+  exclusivo y revalida la tabla entera de una sola pasada; `NOT VALID` solo
+  toma el lock para agregar la constraint (validación instantánea, no mira
+  las filas existentes) y `VALIDATE CONSTRAINT` corre después con un lock
+  mucho más liviano, revisando fila por fila sin bloquear escrituras. Mismo
+  espíritu que la regla dura 7 (`DROP COLUMN` en un despliegue aparte): la
+  operación cara y bloqueante se separa de la que agrega la restricción.
+  No aplica a una tabla recién creada en la misma migración (sin datos
+  todavía no hay nada que revalidar) ni a las migraciones ya aplicadas de
+  este repo (`0007_task_update_reopen_kind.sql` corrió con `task_update`
+  vacía) — es la convención para las que vienen.
 
 ### El caso de las reservas
 
