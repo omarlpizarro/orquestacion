@@ -145,6 +145,26 @@ describe('ChangeTaskStatusHandler', () => {
     );
   });
 
+  it('guarda el motivo recortado de espacios, no el que mandó el cliente tal cual', async () => {
+    vi.mocked(findTaskById).mockResolvedValue({ ...pendingTask, status: 'in_progress' });
+    vi.mocked(updateTaskStatus).mockResolvedValue({
+      ...pendingTask,
+      status: 'blocked',
+      version: 2,
+    });
+    const { handler, collaboration } = buildHandler();
+
+    await run(
+      { ...baseCommand, to_status: 'blocked', reason: '  Falta el permiso municipal  ' },
+      handler,
+    );
+
+    expect(collaboration.createTaskUpdate).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({ body: 'Falta el permiso municipal' }),
+    );
+  });
+
   it('setsActualEndAt en true al completar la tarea', async () => {
     vi.mocked(findTaskById).mockResolvedValue({ ...pendingTask, status: 'in_progress' });
     vi.mocked(updateTaskStatus).mockResolvedValue({ ...pendingTask, status: 'done', version: 2 });
