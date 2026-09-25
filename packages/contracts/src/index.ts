@@ -1,16 +1,23 @@
 import { populateContractRouterPaths } from '@orpc/contract';
 import { healthContract } from './health/health.contract.js';
+import { changeTaskStatusContract } from './projects/change-task-status.contract.js';
 import { createTaskContract } from './projects/create-task.contract.js';
 
 export const contract = populateContractRouterPaths({
   health: healthContract,
   projects: {
     createTask: createTaskContract,
+    changeTaskStatus: changeTaskStatusContract,
   },
 });
 export type Contract = typeof contract;
 
 export { type HealthOutput, healthContract, healthOutputSchema } from './health/health.contract.js';
+export {
+  type ChangeTaskStatusInput,
+  changeTaskStatusContract,
+  changeTaskStatusInputSchema,
+} from './projects/change-task-status.contract.js';
 export {
   type CreateTaskInput,
   createTaskContract,

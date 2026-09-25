@@ -2,8 +2,14 @@ import { Injectable } from '@nestjs/common';
 import type { Tx } from '@orq/db';
 import { sql } from 'drizzle-orm';
 
-/** `task_update_kind_check`, `0006_collaboration.sql`. */
-export type TaskUpdateKind = 'comment' | 'status_change' | 'block_report' | 'evidence' | 'system';
+/** `task_update_kind_check`, `0006_collaboration.sql` + `0007_task_update_reopen_kind.sql`. */
+export type TaskUpdateKind =
+  | 'comment'
+  | 'status_change'
+  | 'block_report'
+  | 'evidence'
+  | 'system'
+  | 'reopen';
 
 export interface CreateTaskUpdateParams {
   id: string;
@@ -12,6 +18,7 @@ export interface CreateTaskUpdateParams {
   taskId: string;
   kind: TaskUpdateKind;
   body: string | null;
+  metadata?: Record<string, unknown>;
 }
 
 export interface TaskUpdateRow {
@@ -46,10 +53,11 @@ export class CollaborationService {
   async createTaskUpdate(tx: Tx, params: CreateTaskUpdateParams): Promise<TaskUpdateRow> {
     const result = await tx.execute<TaskUpdateRowSql>(sql`
       insert into task_update (
-        id, organization_id, created_by_member_id, task_id, kind, body
+        id, organization_id, created_by_member_id, task_id, kind, body, metadata
       ) values (
         ${params.id}, ${params.organizationId}, ${params.createdByMemberId},
-        ${params.taskId}, ${params.kind}, ${params.body}
+        ${params.taskId}, ${params.kind}, ${params.body},
+        ${JSON.stringify(params.metadata ?? {})}
       )
       returning id, task_id, kind, body, created_at
     `);
