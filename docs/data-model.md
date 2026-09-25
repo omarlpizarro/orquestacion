@@ -13,8 +13,8 @@ Siete convenciones aplican a todas las tablas de negocio:
 | Convención | Decisión | Motivo |
 | --- | --- | --- |
 | Clave primaria | `uuid` con UUIDv7 generado en el cliente | El móvil offline crea filas sin esperar al servidor. UUIDv7 es ordenable por tiempo, así que el índice B-tree no se fragmenta como con v4. |
-| Tenant | `organization_id uuid NOT NULL` en toda tabla, incluso las hijas | Es lo que habilita RLS y los índices compuestos. La redundancia es deliberada. |
-| Claves foráneas | Compuestas `(organization_id, <id>)` | Hace estructuralmente imposible referenciar una fila de otro tenant. |
+| Tenant | `organization_id text NOT NULL` en toda tabla, incluso las hijas | Es lo que habilita RLS y los índices compuestos. La redundancia es deliberada. **`text`, no `uuid`** (ver ADR-010): `organization.id` de Better Auth es un string opaco de 32 caracteres, no un UUID — una columna `uuid` rechazaría el valor al insertar. Toda columna que referencia a `member` (`created_by_member_id`, `assignee_member_id`, etc.) es `text` por el mismo motivo; el `id` propio de cada tabla de negocio (`task.id`, `project.id`) sigue siendo `uuid` UUIDv7. |
+| Claves foráneas | Compuestas `(organization_id, <id>)` | Hace estructuralmente imposible referenciar una fila de otro tenant. Mezclar tipos en la clave compuesta (`organization_id text` + `id uuid`) es válido en Postgres. |
 | Tiempos | `timestamptz` en UTC, siempre | La zona horaria vive en `organization` y `site`, no en las filas. |
 | Borrado | `deleted_at timestamptz NULL` | El audit trail y la sincronización necesitan que la fila siga existiendo. |
 | Concurrencia | `version integer NOT NULL DEFAULT 1`, incrementado por trigger | Base de la resolución de conflictos de sincronización offline. |
@@ -24,9 +24,9 @@ Columnas estándar en toda tabla: `id`, `organization_id`, `created_at`, `update
 
 Estados cerrados (`status`, `criticality`, `kind`) se modelan como `text` con `CHECK`, no como enums nativos de Postgres. Agregar un valor a un enum nativo bloquea y no se puede revertir dentro de una transacción; un `CHECK` se reemplaza con `ALTER TABLE ... VALIDATE` sin downtime. Lo que el tenant configura va en tablas de catálogo.
 
-Extensiones requeridas: `btree_gist` (reservas), `pg_trgm` (búsqueda de texto), `pgcrypto` (hash de tokens de invitado). `ltree` si se confirma el árbol de subtareas de profundidad libre.
+Extensiones requeridas: `btree_gist` (reservas), `pg_trgm` (búsqueda de texto), `pgcrypto` (hash de tokens de invitado), `ltree` (árbol de subtareas; profundidad libre a nivel de esquema, aunque el dominio la limita a tres niveles — ver ADR-006).
 
-Nombres en `snake_case`, tablas en plural. Drizzle expone los nombres en `camelCase` del lado TypeScript, así que la convención de base no contamina el código de aplicación.
+Nombres en `snake_case`, tablas en singular (`task`, `site`, `resource_booking`), consistente con las tablas de Better Auth (`user`, `session`, `member`), que son singulares y no se pueden renombrar (CLAUDE.md §6). Drizzle expone los nombres en `camelCase` del lado TypeScript, así que la convención de base no contamina el código de aplicación.
 
 ## Diagrama entidad-relación
 
@@ -64,7 +64,7 @@ Los cinco módulos del monolito modular mapean así:
 | `collaboration` | task\_update, attachment, task\_acknowledgement |
 | `notifications` | notification, notification\_preference, escalation\_policy |
 
-`audit_log` es transversal: lo escriben triggers, no módulos. Ningún módulo consulta tablas de otro; se comunican por eventos in-process y por identificadores.
+`audit_log` es transversal: lo escriben triggers, no módulos. Ningún módulo consulta tablas de otro; se comunican por eventos in-process y por identificadores. Desde fase 2 (ADR-009) el mecanismo concreto es el `EventEmitter` nativo de Node, sin agregar un paquete de eventos: cada módulo emite (`TaskCreated`, etc.) aunque todavía no haya consumidores.
 
 ## Identidad, tenancy y RBAC
 
@@ -74,7 +74,7 @@ Better Auth aporta `user`, `session`, `account`, `verification`, `organization`,
 
 ```sql
 CREATE TABLE organization_profile (
-  organization_id  uuid PRIMARY KEY REFERENCES organization(id) ON DELETE CASCADE,
+  organization_id  text PRIMARY KEY REFERENCES auth.organization(id) ON DELETE CASCADE,
   legal_name       text,
   tax_id           text,
   industry         text NOT NULL CHECK (industry IN
@@ -106,7 +106,7 @@ El documento original define el RBAC como cuatro niveles planos. Eso no alcanza 
 ```sql
 CREATE TABLE site (
   id               uuid PRIMARY KEY,
-  organization_id  uuid NOT NULL REFERENCES organization(id),
+  organization_id  text NOT NULL REFERENCES auth.organization(id),
   name             text NOT NULL,
   timezone         text NOT NULL,
   address          text,
@@ -116,8 +116,8 @@ CREATE TABLE site (
 );
 
 CREATE TABLE member_site_access (
-  organization_id  uuid NOT NULL,
-  member_id        uuid NOT NULL,
+  organization_id  text NOT NULL,
+  member_id        text NOT NULL,
   site_id          uuid NOT NULL,
   role             text NOT NULL CHECK (role IN ('manager','operator')),
   PRIMARY KEY (member_id, site_id),
@@ -136,7 +136,7 @@ Un invitado del nivel 4 nunca es usuario. Recibe una URL con un token cuyo hash 
 ```sql
 CREATE TABLE guest_link (
   id               uuid PRIMARY KEY,
-  organization_id  uuid NOT NULL,
+  organization_id  text NOT NULL,
   token_hash       bytea NOT NULL UNIQUE,
   scope_kind       text NOT NULL CHECK (scope_kind IN ('project','task','milestones')),
   scope_id         uuid NOT NULL,
@@ -145,7 +145,7 @@ CREATE TABLE guest_link (
   revoked_at       timestamptz,
   last_viewed_at   timestamptz,
   view_count       integer NOT NULL DEFAULT 0,
-  created_by_member_id uuid NOT NULL
+  created_by_member_id text NOT NULL
 );
 ```
 
@@ -158,7 +158,7 @@ El token en claro solo existe en el momento de generarlo y en el enlace que reci
 ```sql
 CREATE TABLE project (
   id               uuid PRIMARY KEY,
-  organization_id  uuid NOT NULL,
+  organization_id  text NOT NULL,
   site_id          uuid,
   sop_template_id  uuid,
   code             text NOT NULL,
@@ -178,12 +178,14 @@ CREATE TABLE project (
 
 `archived_at` implementa RF-F1: el proyecto pasa a histórico de solo lectura. La regla no es un trigger sino un guard de aplicación, porque los trabajos de fondo sí necesitan escribir sobre proyectos archivados (por ejemplo, terminar de subir una foto que se sincronizó tarde).
 
+`site_id` sigue nulable (decisión abierta #5 en la última sección). Para resolver la zona horaria con la que se convierte una fecha planeada a UTC (ver ADR-008), el fallback cuando el proyecto no tiene sitio es `organization_profile.timezone` — todo tenant tiene uno, con default `America/Argentina/Buenos_Aires`, así que la conversión siempre resuelve.
+
 ### Tareas
 
 ```sql
 CREATE TABLE task (
   id                  uuid PRIMARY KEY,
-  organization_id     uuid NOT NULL,
+  organization_id     text NOT NULL,
   project_id          uuid NOT NULL,
   parent_task_id      uuid,
   path                ltree NOT NULL,
@@ -193,7 +195,7 @@ CREATE TABLE task (
                         ('pending','in_progress','blocked','in_review','done','cancelled')),
   criticality         text NOT NULL DEFAULT 'normal' CHECK (criticality IN
                         ('low','normal','high','critical')),
-  assignee_member_id  uuid,
+  assignee_member_id  text,
   planned_start_at    timestamptz,
   planned_end_at      timestamptz,
   actual_start_at     timestamptz,
@@ -213,7 +215,11 @@ CREATE TABLE task (
 CREATE INDEX task_path_idx ON task USING gist (path);
 ```
 
-La columna `path` (`ltree`) guarda la ruta desde la raíz. Con `parent_task_id` solo, traer un subárbol completo exige un CTE recursivo por cada consulta; con `ltree` es `WHERE path <@ 'raiz.rama'`, que resuelve en un índice. El costo es mantener `path` en un trigger al insertar o mover. Si se decide limitar la jerarquía a dos niveles, `ltree` sobra y se puede quitar.
+La columna `path` (`ltree`) guarda la ruta desde la raíz. Con `parent_task_id` solo, traer un subárbol completo exige un CTE recursivo por cada consulta; con `ltree` es `WHERE path <@ 'raiz.rama'`, que resuelve en un índice. El costo es mantener `path` en un trigger al insertar o mover.
+
+**Decisión cerrada en fase 2 (ADR-006):** se mantiene `ltree` — el esquema sigue soportando profundidad libre — pero la capa de dominio (`domain/`, no un `CHECK`) rechaza crear una subtarea que dejaría el árbol en más de tres niveles. El límite es una constante de aplicación: cambiarlo no pide migración.
+
+El trigger (`task_maintain_path()`, `0005_projects.sql`) usa el `id` de la tarea como label del path, sin los guiones: un label de `ltree` solo acepta `[A-Za-z0-9_]`, y un UUID los tiene. `replace(id::text, '-', '')` antes de `text2ltree(...)` resuelve eso — cualquier trigger futuro que también arme un label de `ltree` a partir de un UUID necesita el mismo `replace`.
 
 Los cinco estados de RF-E1 están más `cancelled`, que el documento original no contempla y que aparece siempre: una cirugía se suspende, una cosecha se cancela por lluvia. Sin ese estado los KPIs de cumplimiento quedan contaminados.
 
@@ -226,7 +232,7 @@ Una plantilla es un árbol de tareas con tiempos relativos, no fechas:
 ```sql
 CREATE TABLE sop_template (
   id               uuid PRIMARY KEY,
-  organization_id  uuid NOT NULL,
+  organization_id  text NOT NULL,
   name             text NOT NULL,
   industry_hint    text,
   is_active        boolean NOT NULL DEFAULT true,
@@ -235,7 +241,7 @@ CREATE TABLE sop_template (
 
 CREATE TABLE sop_template_task (
   id                     uuid PRIMARY KEY,
-  organization_id        uuid NOT NULL,
+  organization_id        text NOT NULL,
   sop_template_id        uuid NOT NULL,
   parent_id              uuid,
   title                  text NOT NULL,
@@ -260,7 +266,7 @@ RF-A5 se implementa con una columna `jsonb` en `task` y `project`, más una tabl
 ```sql
 CREATE TABLE custom_field_definition (
   id               uuid PRIMARY KEY,
-  organization_id  uuid NOT NULL,
+  organization_id  text NOT NULL,
   scope            text NOT NULL CHECK (scope IN ('project','task')),
   project_id       uuid,
   key              text NOT NULL CHECK (key ~ '^[a-z][a-z0-9_]{0,38}$'),
@@ -302,7 +308,7 @@ CREATE EXTENSION IF NOT EXISTS btree_gist;
 
 CREATE TABLE resource (
   id               uuid PRIMARY KEY,
-  organization_id  uuid NOT NULL,
+  organization_id  text NOT NULL,
   site_id          uuid,
   name             text NOT NULL,
   category         text NOT NULL,
@@ -314,7 +320,7 @@ CREATE TABLE resource (
 
 CREATE TABLE resource_booking (
   id                      uuid PRIMARY KEY,
-  organization_id         uuid NOT NULL,
+  organization_id         text NOT NULL,
   resource_id             uuid NOT NULL,
   task_id                 uuid,
   kind                    text NOT NULL DEFAULT 'task'
@@ -324,9 +330,9 @@ CREATE TABLE resource_booking (
                             CHECK (status IN ('tentative','confirmed','cancelled')),
   is_override             boolean NOT NULL DEFAULT false,
   override_reason         text,
-  override_by_member_id   uuid,
+  override_by_member_id   text,
   overridden_booking_ids  uuid[] NOT NULL DEFAULT '{}',
-  created_by_member_id    uuid NOT NULL,
+  created_by_member_id    text NOT NULL,
   created_at              timestamptz NOT NULL DEFAULT now(),
 
   FOREIGN KEY (organization_id, resource_id) REFERENCES resource (organization_id, id),
@@ -371,7 +377,7 @@ El forzado no rompe la constraint: la evita, porque el predicado `WHERE` la excl
 
 ```sql
 CREATE TABLE task_dependency (
-  organization_id       uuid NOT NULL,
+  organization_id       text NOT NULL,
   predecessor_task_id   uuid NOT NULL,
   successor_task_id     uuid NOT NULL,
   type                  text NOT NULL DEFAULT 'FS'
@@ -417,12 +423,12 @@ RF-E3 se implementa en tres pasos, no como un `UPDATE` masivo:
 ```sql
 CREATE TABLE schedule_change (
   id                  uuid PRIMARY KEY,
-  organization_id     uuid NOT NULL,
+  organization_id     text NOT NULL,
   project_id          uuid NOT NULL,
   trigger_task_id     uuid,
   reason              text,
   shift_minutes       integer,
-  applied_by_member_id uuid NOT NULL,
+  applied_by_member_id text NOT NULL,
   applied_at          timestamptz NOT NULL DEFAULT now(),
   affected            jsonb NOT NULL
 );
@@ -445,9 +451,9 @@ Son dos cosas distintas que suelen confundirse. `task_update` es lo que la gente
 ```sql
 CREATE TABLE task_update (
   id                uuid PRIMARY KEY,
-  organization_id   uuid NOT NULL,
+  organization_id   text NOT NULL,
   task_id           uuid NOT NULL,
-  author_member_id  uuid,
+  author_member_id  text,
   kind              text NOT NULL CHECK (kind IN
                       ('comment','status_change','block_report','evidence','system')),
   body              text,
@@ -469,7 +475,7 @@ CREATE TABLE task_update (
 ```sql
 CREATE TABLE attachment (
   id               uuid PRIMARY KEY,
-  organization_id  uuid NOT NULL,
+  organization_id  text NOT NULL,
   task_update_id   uuid,
   task_id          uuid,
   storage_key      text NOT NULL,
@@ -481,7 +487,7 @@ CREATE TABLE attachment (
   upload_status    text NOT NULL DEFAULT 'pending'
                      CHECK (upload_status IN ('pending','uploading','complete','failed')),
   captured_at      timestamptz,
-  uploaded_by_member_id uuid NOT NULL,
+  uploaded_by_member_id text NOT NULL,
   created_at       timestamptz NOT NULL DEFAULT now()
 );
 ```
@@ -497,7 +503,7 @@ El registro lo escribe un trigger genérico, no la aplicación. Si depende de qu
 ```sql
 CREATE TABLE audit_log (
   id               bigint GENERATED ALWAYS AS IDENTITY,
-  organization_id  uuid NOT NULL,
+  organization_id  text NOT NULL,
   entity_type      text NOT NULL,
   entity_id        uuid NOT NULL,
   action           text NOT NULL CHECK (action IN ('insert','update','delete')),
@@ -528,7 +534,7 @@ BEGIN
                          actor_member_id, changed, request_id)
   VALUES (COALESCE(NEW, OLD).organization_id, TG_TABLE_NAME,
           COALESCE(NEW, OLD).id, lower(TG_OP),
-          nullif(current_setting('app.current_member', true), '')::uuid,
+          nullif(current_setting('app.current_member', true), ''),
           diff, current_setting('app.request_id', true));
 
   RETURN COALESCE(NEW, OLD);
@@ -553,8 +559,8 @@ El módulo D del relevamiento depende de una propiedad que no es obvia: la notif
 ```sql
 CREATE TABLE notification (
   id                 uuid PRIMARY KEY,
-  organization_id    uuid NOT NULL,
-  recipient_member_id uuid NOT NULL,
+  organization_id    text NOT NULL,
+  recipient_member_id text NOT NULL,
   task_id            uuid,
   template_key       text NOT NULL,
   channel            text NOT NULL CHECK (channel IN ('inapp','push','email','whatsapp')),
@@ -572,8 +578,8 @@ CREATE TABLE notification (
 );
 
 CREATE TABLE notification_preference (
-  organization_id  uuid NOT NULL,
-  member_id        uuid NOT NULL,
+  organization_id  text NOT NULL,
+  member_id        text NOT NULL,
   template_key     text NOT NULL,
   channels         text[] NOT NULL DEFAULT '{inapp,push}',
   quiet_hours      int4range,
@@ -592,7 +598,7 @@ RF-D2 se configura por organización o por proyecto, no se cablea:
 ```sql
 CREATE TABLE escalation_policy (
   id               uuid PRIMARY KEY,
-  organization_id  uuid NOT NULL,
+  organization_id  text NOT NULL,
   project_id       uuid,
   applies_to_criticality text[] NOT NULL DEFAULT '{high,critical}',
   steps            jsonb NOT NULL
@@ -634,9 +640,9 @@ El `singletonKey` por tarea hace que reprogramar reemplace el chequeo pendiente 
 
 ```sql
 CREATE TABLE task_acknowledgement (
-  organization_id  uuid NOT NULL,
+  organization_id  text NOT NULL,
   task_id          uuid NOT NULL,
-  member_id        uuid NOT NULL,
+  member_id        text NOT NULL,
   acknowledged_at  timestamptz NOT NULL DEFAULT now(),
   channel          text,
   PRIMARY KEY (task_id, member_id)
@@ -705,13 +711,13 @@ ALTER TABLE task ENABLE ROW LEVEL SECURITY;
 ALTER TABLE task FORCE ROW LEVEL SECURITY;
 
 CREATE POLICY task_tenant_isolation ON task
-  USING      (organization_id = nullif(current_setting('app.current_org', true), '')::uuid)
-  WITH CHECK (organization_id = nullif(current_setting('app.current_org', true), '')::uuid);
+  USING      (organization_id = nullif(current_setting('app.current_org', true), ''))
+  WITH CHECK (organization_id = nullif(current_setting('app.current_org', true), ''));
 ```
 
 `USING` filtra lo que se lee, `WITH CHECK` impide escribir una fila de otro tenant. Las dos cláusulas son necesarias; con solo `USING`, un `INSERT` con el `organization_id` equivocado pasa.
 
-El `nullif(..., '')` es obligatorio, no cosmético: la primera vez que una conexión toca un GUC custom como `app.current_org` con `set_config(..., true)`, Postgres registra un placeholder para esa conexión con valor por defecto `''` (no `NULL`). Al terminar esa transacción (commit o rollback), el valor vuelve a `''`, nunca a `NULL`, aunque nunca se hubiera seteado antes en esa conexión. Sin el `nullif`, una transacción de sistema (que no setea `app.current_org`) que reutiliza una conexión del pool ya tocada por una transacción de tenant revienta con `22P02` (cast de `''` a `uuid`) en vez de simplemente no ver ninguna fila.
+El `nullif(..., '')` sigue valiendo la pena aunque `organization_id` sea `text` (ADR-010) y ya no haga falta castear nada: la primera vez que una conexión toca un GUC custom como `app.current_org` con `set_config(..., true)`, Postgres registra un placeholder para esa conexión con valor por defecto `''` (no `NULL`). Al terminar esa transacción (commit o rollback), el valor vuelve a `''`, nunca a `NULL`, aunque nunca se hubiera seteado antes en esa conexión. Sin el `nullif`, una transacción de sistema (que no setea `app.current_org`) que reutiliza una conexión del pool ya tocada por una transacción de tenant compara `organization_id = ''` en vez de `organization_id = NULL` — el resultado práctico es el mismo (ninguna fila real tiene `organization_id = ''`, así que sigue sin ver nada), pero `NULL` deja explícito que el contexto está "sin tenant", no "tenant vacío".
 
 La misma policy se aplica a todas las tablas con `organization_id`. Conviene generarla en la migración recorriendo el catálogo, no escribirla 25 veces a mano.
 
@@ -769,13 +775,13 @@ No todo el modelo va al teléfono. Sincronizar de más rompe la batería, el alm
 
 Las escrituras no van directo a Postgres. PowerSync entrega la cola local a un handler que las envía a la API, y la API aplica las mismas validaciones, permisos, RLS y constraints que una escritura online. Esto es lo que evita que el modo offline se convierta en una puerta trasera al esquema.
 
-Cada mutación lleva un `client_mutation_id` (UUIDv7 generado en el teléfono). El servidor lo registra:
+Cada mutación lleva un `client_mutation_id` (UUIDv7). Nació pensado para el móvil, pero desde fase 2 (ADR-007) **todo** endpoint de escritura lo exige, no solo los que pueden originarse offline: la caché de red del navegador también reintenta un POST, y el mismo mecanismo de idempotencia cubre ese caso sin duplicar código. El servidor lo registra:
 
 ```sql
 CREATE TABLE mutation_log (
   client_mutation_id uuid PRIMARY KEY,
-  organization_id    uuid NOT NULL,
-  member_id          uuid NOT NULL,
+  organization_id    text NOT NULL,
+  member_id          text NOT NULL,
   kind               text NOT NULL,
   entity_id          uuid,
   result             text NOT NULL CHECK (result IN ('applied','rejected','duplicate')),
@@ -867,7 +873,7 @@ CREATE TABLE plan (
 );
 
 CREATE TABLE subscription (
-  organization_id     uuid PRIMARY KEY REFERENCES organization(id),
+  organization_id     text PRIMARY KEY REFERENCES auth.organization(id),
   plan_code           text NOT NULL REFERENCES plan(code),
   status              text NOT NULL CHECK (status IN
                         ('trialing','active','past_due','paused','cancelled')),
@@ -881,7 +887,7 @@ CREATE TABLE subscription (
 CREATE TABLE payment_event (
   external_event_id  text PRIMARY KEY,
   provider           text NOT NULL,
-  organization_id    uuid,
+  organization_id    text,
   kind               text NOT NULL,
   payload            jsonb NOT NULL,
   processed_at       timestamptz,
@@ -908,7 +914,7 @@ El conteo vive aparte para no recalcularlo en cada request:
 
 ```sql
 CREATE TABLE usage_counter (
-  organization_id  uuid NOT NULL,
+  organization_id  text NOT NULL,
   metric           text NOT NULL,
   period           date NOT NULL,
   value            bigint NOT NULL DEFAULT 0,
@@ -937,31 +943,32 @@ slices siguientes contra una conexión que en los hechos ignora las policies.
 | --- | --- | --- | --- |
 | `0000` | `extensions` | `btree_gist`, `pg_trgm`, `pgcrypto`, `ltree` (ya creadas por `bootstrap-roles.sql`; acá con `IF NOT EXISTS`) | Hecha |
 | `0001` | `roles_rls` | Grants a `app_user`, `ALTER DEFAULT PRIVILEGES`, función `app_apply_tenant_policies()` | Hecha |
-| `0002` | `auth` | Tablas de Better Auth vía su CLI, sin tocar | Pendiente |
-| `0003` | `tenancy` | `organization_profile`, `site`, `member_site_access`, `guest_link` | Pendiente |
-| `0004` | `projects` | `project`, `task`, triggers de `path` y `version` | Pendiente |
-| `0005` | `templates` | `sop_template`, `sop_template_task` | Pendiente |
-| `0006` | `custom_fields` | `custom_field_definition`, índices GIN | Pendiente |
-| `0007` | `resources` | `resource`, `resource_booking` con la exclusion constraint | Pendiente |
-| `0008` | `dependencies` | `task_dependency`, función anti-ciclos, `schedule_change` | Pendiente |
-| `0009` | `collaboration` | `task_update`, `attachment`, `task_acknowledgement` | Pendiente |
-| `0010` | `audit` | `audit_log` particionada, `audit_trigger()`, `REVOKE` | Pendiente |
-| `0011` | `notifications` | `notification`, `notification_preference`, `escalation_policy` | Pendiente |
-| `0012` | `sync` | `mutation_log`, publicación lógica, `wal_level` | Pendiente |
-| `0013` | `billing` | `plan`, `subscription`, `payment_event`, `usage_counter` | Pendiente |
-| `0014` | `analytics` | `project_kpi` materializada y su job de refresco | Pendiente |
-| `0015` | `seed` | Planes, plantillas SOP por industria, catálogos iniciales | Pendiente |
+| `0002` | `auth` | Tablas de Better Auth vía su CLI, sin tocar. En esquema `auth`, no `public` (ADR-011) | Hecha |
+| `0003` | `tenancy` | `organization_profile`, `site`, `member_site_access`, `guest_link` | Hecha |
+| `0004` | `mutation_log` | `mutation_log`, adelantada desde `0012` (ADR-007: la idempotencia se adelanta a fase 2, igual que roles/RLS se adelantó a fase 1) | Hecha |
+| `0005` | `projects` | `project`, `task`, triggers de `path` y `version` (`app_bump_version()`/`app_apply_version_triggers()`, `task_maintain_path()`) | Hecha |
+| `0006` | `templates` | `sop_template`, `sop_template_task` | Pendiente |
+| `0007` | `custom_fields` | `custom_field_definition`, índices GIN | Pendiente |
+| `0008` | `resources` | `resource`, `resource_booking` con la exclusion constraint | Pendiente |
+| `0009` | `dependencies` | `task_dependency`, función anti-ciclos, `schedule_change` | Pendiente |
+| `0010` | `collaboration` | `task_update`, `attachment`, `task_acknowledgement` | Pendiente |
+| `0011` | `audit` | `audit_log` particionada, `audit_trigger()`, `REVOKE` | Pendiente |
+| `0012` | `notifications` | `notification`, `notification_preference`, `escalation_policy` | Pendiente |
+| `0013` | `sync` | Publicación lógica, `wal_level` (ya no `mutation_log`, adelantada a `0004`) | Pendiente |
+| `0014` | `billing` | `plan`, `subscription`, `payment_event`, `usage_counter` | Pendiente |
+| `0015` | `analytics` | `project_kpi` materializada y su job de refresco | Pendiente |
+| `0016` | `seed` | Planes, plantillas SOP por industria, catálogos iniciales | Pendiente |
 
-`0000` a `0010` son la v1. `0011` a `0015` acompañan las fases posteriores, pero conviene escribirlas al mismo tiempo para que el esquema quede coherente de entrada.
+`0000` a `0011` son la v1. `0012` a `0016` acompañan las fases posteriores, pero conviene escribirlas al mismo tiempo para que el esquema quede coherente de entrada.
 
 Regla de operación: ninguna migración hace `DROP COLUMN` en el mismo despliegue que deja de usarla. Primero se deja de escribir, se despliega, se verifica, y recién en un despliegue posterior se borra. Con clientes en el campo que corren versiones viejas de la app móvil, esa disciplina es lo que evita cortes.
 
 ### Decisiones abiertas
 
-Cinco cosas que el esquema deja preparadas pero que conviene confirmar antes de escribir código:
+Esta lista se mantiene igual en `CLAUDE.md` §13; si las dos alguna vez difieren, gana la más reciente y hay que sincronizar la otra.
 
-1. **Profundidad de subtareas.** El esquema soporta árbol libre con `ltree`. Si dos niveles alcanzan, se quita `ltree` y queda solo `parent_task_id`, que es bastante más simple. La respuesta depende de si un frente de obra necesita descomponer una subtarea otra vez.
+1. ~~**Profundidad de subtareas.**~~ **Cerrada en fase 2 (ADR-006).** Se mantiene `ltree` (profundidad libre en el esquema); el dominio limita a tres niveles con una constante, no con un `CHECK`. Ver la nota en la sección de `task` más arriba.
 2. **Recursos con capacidad.** Hoy cada unidad física es un recurso. Si aparece un caso real de recurso agrupado (cinco camas, veinte cascos), habría que revisar, porque la exclusion constraint no lo modela.
 3. **Reservas sin conexión.** El esquema las permite como `tentative`. La alternativa es prohibir reservar offline, que es más simple y menos útil.
 4. **Retención del audit log.** La partición mensual necesita un número. Doce meses cubre la mayoría de los casos; salud y minería pueden requerir más por normativa.
-5. **Sitios obligatorios u opcionales.** `project.site_id` es nulable. Si toda operación pertenece siempre a un sitio, hacerlo obligatorio simplifica el RBAC por alcance.
+5. **Sitios obligatorios u opcionales.** `project.site_id` sigue nulable — **no** se cerró en fase 2. Lo único que fase 2 definió fue un fallback de zona horaria para cuando es nulo (`organization_profile.timezone`, ver ADR-008 y la nota en la sección de `project`); sigue pendiente si conviene hacerlo `NOT NULL` para simplificar el RBAC por alcance.

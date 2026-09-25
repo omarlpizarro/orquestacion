@@ -12,6 +12,8 @@ describe('GET /health (integración)', () => {
     harness = await startPostgresHarness();
     process.env.DATABASE_URL = harness.appConnectionUri;
     process.env.DATABASE_APP_ROLE = 'app_login';
+    process.env.BETTER_AUTH_SECRET ??= 'test_secret_'.padEnd(32, 'x');
+    process.env.BETTER_AUTH_URL ??= 'http://localhost:3000';
 
     app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter(), {
       logger: false,

@@ -69,7 +69,8 @@ Ejemplo: @ts-rest/nest (última estable 3.52.1, marzo 2025) declara peer @nestjs
 | Driver de Postgres | `pg` | 8.23.0 | No `postgres` (postgres.js): pg-boss ya depende de `pg`, dos drivers duplicarían pools |
 | ORM | Drizzle | `drizzle-orm` 0.45.2, `drizzle-kit` 0.31.10 | SQL-first. Migraciones con `drizzle-kit`, incluidas las de SQL crudo (`generate --custom`) |
 | Contratos | Zod 4 + oRPC | `zod` 4.6.5, `@orpc/*` 1.15.2 | Ver ADR-005. Fuente única en `packages/contracts`, ESM puro. **Es la v1 de oRPC: se usa `oc.route()`, no la sintaxis de `oc.meta(openapi(...))` que muestra orpc.dev (esa es v2, sin publicar en npm todavía)** |
-| Auth | Better Auth + plugin `organization` | — | Tablas generadas por su CLI, no se editan a mano |
+| Fechas y zonas horarias | date-fns + date-fns-tz | `date-fns` 4.4.0, `date-fns-tz` 3.2.0 | Ver ADR-008. Node 24.16.0 no expone `Temporal` global todavía (verificado: `typeof Temporal === 'undefined'`), así que la conversión hora-local-del-sitio → UTC no se resuelve con nada nativo |
+| Auth | Better Auth + plugin `organization` | `better-auth` 1.7.5, CLI `auth` 1.7.5 (devDependency, solo para `auth generate`) | Tablas generadas por su CLI, no se editan a mano. Viven en su propio esquema de Postgres `auth`, no en `public` (ADR-011). Sus IDs son `text` opaco, no `uuid` (ADR-010) |
 | Jobs | pg-boss | 12.33.2 | Sobre el mismo Postgres. Encolado transaccional |
 | Offline | PowerSync (Open Edition, self-hosted) | — | Bucket storage en Postgres separado |
 | Móvil | Expo / React Native | — | SQLite vía PowerSync |
@@ -145,7 +146,8 @@ Antes de dar por terminada cualquier tarea: `pnpm check && pnpm test`.
 
 Un módulo **no** importa el esquema Drizzle de otro ni hace join contra sus tablas.
 Para leer datos de otro módulo, usás el servicio que ese módulo exporta. Para
-reaccionar a algo, escuchás su evento de dominio.
+reaccionar a algo, escuchás su evento de dominio: desde fase 2 (ADR-009) con el
+`EventEmitter` nativo de Node, sin agregar un paquete de eventos.
 
 `audit_log` es transversal: lo escriben triggers de base, ningún módulo lo escribe.
 
@@ -195,9 +197,19 @@ Detalle completo en `docs/data-model.md`. Lo mínimo que tenés que respetar sie
   `resource_booking`). Así queda consistente con las tablas de Better Auth
   (`user`, `session`, `member`), que son singulares y no se pueden renombrar.
 - Toda migración que crea una tabla de negocio nueva termina con
-  `select app_apply_tenant_policies();` (la función vive en la migración
-  `0001_roles_rls`, ver `packages/db/migrations/`). Es idempotente: cubre la
-  tabla nueva sin tener que escribir la policy a mano.
+  `select app_apply_tenant_policies();` **y** `select app_apply_version_triggers();`
+  (ambas funciones viven en migraciones ya aplicadas — la primera en
+  `0001_roles_rls`, la segunda en `0005_projects`, ver
+  `packages/db/migrations/`). Las dos son idempotentes: cubren la tabla
+  nueva sin tener que escribir la policy o el trigger de `version` a mano.
+- **El código de aplicación consulta con SQL crudo** (`tx.execute(sql\`...\`)`),
+  nunca con el query builder de Drizzle importando los objetos de tabla
+  (`db.select().from(task)`). Los esquemas de `packages/db/src/schema/` son
+  la fuente para `drizzle-kit generate`, no para armar queries en
+  `apps/api/`. Es lo que hace cumplible la regla dura 5 (dependency-cruiser
+  `no-cross-module-schema`): si un módulo importara el objeto de tabla de
+  otro para usar el query builder, la regla lo bloquea recién ahí, pero con
+  SQL crudo el problema ni se plantea — nada que importar.
 
 ### El caso de las reservas
 
@@ -262,8 +274,12 @@ interpretar, y un `message` en español apto para mostrarle al usuario.
 
 ## 9. Offline: qué implica al escribir código
 
-El móvil escribe a través de la API, nunca directo a Postgres. Toda mutación que
-puede originarse en el móvil:
+El móvil escribe a través de la API, nunca directo a Postgres.
+
+**Desde fase 2, todo endpoint de escritura acepta `client_mutation_id`** (UUIDv7),
+no solo los que pueden originarse en el móvil: se adelantó por el mismo motivo
+que roles y RLS se adelantaron a fase 1 — es cara de retrofitear (ver
+ADR-007). Toda mutación:
 
 - Acepta un `client_mutation_id` (UUIDv7) y lo registra en `mutation_log`. Un
   reintento devuelve el resultado anterior en vez de duplicar.
@@ -326,6 +342,13 @@ doblemente reservado, una alerta que no llega a un frente de mina).
 **Si necesitás una decisión de arquitectura nueva:** proponela, esperá confirmación,
 y una vez aprobada escribila como ADR en `docs/adr/` antes de implementarla.
 
+**Si aparece un prerequisito que el brief no contemplaba** (por ejemplo, asumía
+resuelta una fase anterior y no lo estaba): va en su propio PR, separado del
+trabajo que lo necesita, y se mergea antes. No se mezclan en el mismo PR aunque
+se hayan construido en la misma sesión — revisar "¿está bien esta base?" y
+"¿está bien esta feature?" son dos preguntas distintas, y mezclarlas hace más
+difícil revisar cualquiera de las dos a fondo.
+
 **Nunca:** agregues dependencias sin preguntar, cambies el esquema sin actualizar
 `docs/data-model.md`, desactives un test que falla, ni uses `--force` en migraciones.
 
@@ -335,11 +358,23 @@ y una vez aprobada escribila como ADR en `docs/adr/` antes de implementarla.
 
 Confirmar antes de implementar lo que dependa de ellas:
 
-1. Profundidad de subtareas: árbol libre con `ltree` o dos niveles fijos.
+1. ~~Profundidad de subtareas~~ — **cerrada en fase 2** (ver ADR-006): se
+   mantiene `ltree` en el esquema (profundidad libre a nivel de base), pero
+   la capa de dominio limita a tres niveles con una constante, no con un
+   `CHECK`.
 2. Recursos con capacidad mayor a uno (hoy cada unidad física es un recurso).
 3. Si se permiten reservas sin conexión (hoy sí, como `tentative`).
 4. Retención del audit log en meses.
-5. Si `project.site_id` es obligatorio.
+5. Si `project.site_id` es obligatorio. **Sigue abierta** — fase 2 solo definió
+   un fallback para cuando es nulo (`organization_profile.timezone` para
+   resolver la zona horaria de una tarea, ver ADR-008), no resolvió la
+   pregunta de si debería ser `NOT NULL`.
+6. Idempotencia de mutaciones con payload distinto bajo el mismo
+   `client_mutation_id`: hoy `mutation_log` no guarda un hash del request, así
+   que un reintento con el mismo `client_mutation_id` pero datos distintos
+   devuelve el resultado anterior en silencio, sin avisar del mismatch. Falta
+   decidir si eso alcanza (es la semántica que ADR-007 ya documenta) o si hace
+   falta guardar un hash del payload y rechazar el reintento si no coincide.
 
 ---
 
