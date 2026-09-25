@@ -14,7 +14,7 @@ import { CollaborationService } from '../../../collaboration/collaboration.modul
 import { TaskNotFoundError } from '../../domain/errors/task-not-found.error.js';
 import { TaskVersionMismatchError } from '../../domain/errors/task-version-mismatch.error.js';
 import {
-  type OrgRole,
+  parseSingleOrgRole,
   resolveTaskStatusTransition,
   type TaskStatus,
 } from '../../domain/task-status-transitions.js';
@@ -24,20 +24,6 @@ import {
   updateTaskStatus,
 } from '../../infrastructure/task.repository.js';
 import type { ChangeTaskStatusCommand } from './change-task-status.command.js';
-
-/**
- * `tenant.role` puede traer varios roles separados por coma (Better Auth lo
- * permite, ver `shared/auth/access-control.ts#hasCapability`), pero en la
- * práctica los cuatro niveles de CLAUDE.md §7 son jerárquicos y excluyentes
- * — nada en el sistema asigna hoy más de uno. Se toma el primero de la
- * lista como rol efectivo para la máquina de estados; si algún día un
- * miembro real tiene varios, esto hay que revisarlo junto con
- * `hasCapability`.
- */
-function resolveEffectiveRole(roleString: string): OrgRole {
-  const [first] = roleString.split(',').map((role) => role.trim());
-  return first as OrgRole;
-}
 
 @Injectable()
 export class ChangeTaskStatusHandler {
@@ -123,7 +109,7 @@ export class ChangeTaskStatusHandler {
     const transition = resolveTaskStatusTransition({
       from: current.status as TaskStatus,
       to: command.to_status,
-      role: resolveEffectiveRole(tenant.role),
+      role: parseSingleOrgRole(tenant.role),
       isAssignee: current.assigneeMemberId === tenant.memberId,
       reason: command.reason,
     });

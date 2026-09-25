@@ -4,7 +4,12 @@ import { TaskStatusTransitionForbiddenError } from './errors/task-status-transit
 import { TaskStatusTransitionRequiresAssigneeError } from './errors/task-status-transition-requires-assignee.error.js';
 import type { OrgRole, ReasonKind, TaskStatus } from './task-status.js';
 
-export type { OrgRole, ReasonKind, TaskStatus } from './task-status.js';
+export {
+  type OrgRole,
+  parseSingleOrgRole,
+  type ReasonKind,
+  type TaskStatus,
+} from './task-status.js';
 
 const ALL_ROLES: readonly OrgRole[] = ['owner', 'director', 'manager', 'operator'];
 const MANAGEMENT_ROLES: readonly OrgRole[] = ['owner', 'director', 'manager'];

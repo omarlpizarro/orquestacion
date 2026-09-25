@@ -249,17 +249,27 @@ describe('ChangeTaskStatusHandler', () => {
     expect(updateTaskStatus).not.toHaveBeenCalled();
   });
 
-  it('toma el primer rol de una lista separada por comas como rol efectivo', async () => {
-    vi.mocked(findTaskById).mockResolvedValue({ ...pendingTask, status: 'in_review' });
-    vi.mocked(updateTaskStatus).mockResolvedValue({ ...pendingTask, status: 'done', version: 2 });
+  it('un member con más de un rol distinto hace fallar fuerte, no elige uno en silencio', async () => {
     const { handler } = buildHandler();
     const multiRole = { ...tenant, role: 'manager,operator' };
 
-    const result = await runWithRequestContext({ requestId: 'req-1', tenant: multiRole }, () =>
-      handler.execute({ ...baseCommand, to_status: 'done' }),
+    await expect(
+      runWithRequestContext({ requestId: 'req-1', tenant: multiRole }, () =>
+        handler.execute(baseCommand),
+      ),
+    ).rejects.toThrow();
+    expect(updateTaskStatus).not.toHaveBeenCalled();
+  });
+
+  it('el mismo rol repetido no cuenta como "varios": no falla', async () => {
+    const { handler } = buildHandler();
+    const repeatedRole = { ...tenant, role: 'operator,operator' };
+
+    const result = await runWithRequestContext({ requestId: 'req-1', tenant: repeatedRole }, () =>
+      handler.execute(baseCommand),
     );
 
-    expect(result.status).toBe('done');
+    expect(result.status).toBe('in_progress');
   });
 
   it('emite task.status_changed después de aplicar el cambio, no antes', async () => {
