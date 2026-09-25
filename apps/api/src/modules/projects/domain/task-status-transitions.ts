@@ -209,12 +209,24 @@ export interface TaskStatusTransitionRequest {
   readonly reason?: string | undefined;
 }
 
+export interface ResolvedTaskStatusTransition extends TaskStatusTransition {
+  /**
+   * El `reason` de la request, ya validado y sin espacios al borde —
+   * `null` cuando `requiresReason` es `null`, string no vacío cuando no lo
+   * es. Devolverlo resuelto (en vez de que el handler vuelva a leer
+   * `request.reason` y confiar en que ya se validó) evita que el llamador
+   * necesite un `as string` para convencer al compilador de algo que este
+   * módulo ya comprobó, y evita guardar un motivo con espacios de sobra.
+   */
+  readonly reason: string | null;
+}
+
 /**
- * Valida una transición pedida y devuelve la definición para que el handler
- * (todavía no existe: PR siguiente, con endpoint) sepa qué efectos aplicar
- * — `requiresReason`/`setsActualEndAt`/`clearsActualEndAt` son instrucciones
- * para esa capa, no algo que este módulo ejecute: dominio puro no toca la
- * base ni el reloj.
+ * Valida una transición pedida y devuelve la definición, más el motivo ya
+ * validado, para que el handler sepa qué efectos aplicar —
+ * `requiresReason`/`setsActualEndAt`/`clearsActualEndAt`/`reason` son
+ * instrucciones para esa capa, no algo que este módulo ejecute: dominio
+ * puro no toca la base ni el reloj.
  *
  * Orden de validación: primero si la transición existe. No es una elección
  * arbitraria ni busca ocultarle la matriz a un rol sin permiso — de hecho no
@@ -227,7 +239,7 @@ export interface TaskStatusTransitionRequest {
  */
 export function resolveTaskStatusTransition(
   request: TaskStatusTransitionRequest,
-): TaskStatusTransition {
+): ResolvedTaskStatusTransition {
   const transition = findTaskStatusTransition(request.from, request.to);
   if (!transition) {
     throw new InvalidTaskStatusTransitionError(request.from, request.to);
@@ -238,8 +250,12 @@ export function resolveTaskStatusTransition(
   if (request.role === 'operator' && !request.isAssignee) {
     throw new TaskStatusTransitionRequiresAssigneeError(request.from, request.to);
   }
-  if (transition.requiresReason && !request.reason?.trim()) {
+  if (!transition.requiresReason) {
+    return { ...transition, reason: null };
+  }
+  const reason = request.reason?.trim();
+  if (!reason) {
     throw new ReasonRequiredError(transition.requiresReason);
   }
-  return transition;
+  return { ...transition, reason };
 }
