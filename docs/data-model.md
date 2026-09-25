@@ -805,6 +805,24 @@ La base de origen necesita `wal_level = logical` y una publicación para las tab
 
 Las sync rules son código versionado y desplegado, y su despliegue recalcula los buckets. Un cambio de sync rules en producción es una operación con costo, no un ajuste de configuración: se prueba en staging primero.
 
+### `updated_at` no sirve como cursor de sincronización
+
+`now()` en Postgres devuelve el instante de inicio de la transacción, no el del
+commit: todas las llamadas a `now()` dentro de la misma transacción ven el mismo
+valor, sin importar cuánto dure. Una transacción larga puede escribir su fila con
+un `updated_at` anterior al de otra transacción que empezó después pero commiteó
+antes.
+
+Si PowerSync (o cualquier consumidor) arma un cursor de sincronización del tipo
+"traeme todo lo que tenga `updated_at` mayor al último corte", una fila así queda
+por debajo del corte cuando su commit se hace visible, y el cursor la salta
+silenciosamente. No se arregla usando `clock_timestamp()` en vez de `now()`
+(eso resuelve el instante, no el orden de visibilidad entre transacciones
+concurrentes) — hace falta un número de secuencia monótono, asignado por
+commit, que las sync rules puedan usar como cursor en vez de `updated_at`. Queda
+pendiente decidirlo cuando se implemente PowerSync en la fase 4 (§14 de
+`CLAUDE.md`).
+
 ## Índices, rendimiento y crecimiento
 
 Regla general: todo índice de una tabla de negocio arranca con `organization_id`. Como RLS agrega ese filtro a cada consulta, un índice que no lo tenga primero casi nunca se usa.
