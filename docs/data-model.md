@@ -225,6 +225,8 @@ Los cinco estados de RF-E1 están más `cancelled`, que el documento original no
 
 Las transiciones válidas se validan en la capa de aplicación con una máquina de estados explícita, no con un trigger. Un trigger que rechaza una transición produce un error de base opaco a 200 km del frente de obra; un guard de aplicación devuelve un mensaje que el operario entiende.
 
+`cancelled` es terminal; `done` no lo es (ADR-012): se puede reabrir a `in_progress`, con motivo obligatorio y solo para roles de gerencia, porque cerrar una tarea por error es habitual en campo y una tarea nueva perdería la bitácora y los adjuntos de la original.
+
 ### Plantillas SOP
 
 Una plantilla es un árbol de tareas con tiempos relativos, no fechas:
