@@ -19,6 +19,13 @@ export interface DomainEventMap {
     projectId: string;
     requestId: string;
   };
+  'task.status_changed': {
+    taskId: string;
+    organizationId: string;
+    fromStatus: string;
+    toStatus: string;
+    requestId: string;
+  };
 }
 
 class DomainEvents extends EventEmitter {

@@ -185,3 +185,43 @@ export async function findTaskById(
   const row = result.rows[0];
   return row ? mapTaskRow(row) : null;
 }
+
+export interface UpdateTaskStatusParams {
+  organizationId: string;
+  taskId: string;
+  /** Concurrencia optimista: el `UPDATE` solo pega si nadie más cambió la fila desde que el handler la leyó. */
+  expectedVersion: number;
+  toStatus: string;
+  /** `TaskStatusTransition.setsActualEndAt`/`clearsActualEndAt` (ADR-012) — la hora la pone `now()` de Postgres, nunca el cliente. */
+  setsActualEndAt: boolean;
+  clearsActualEndAt: boolean;
+}
+
+/**
+ * `version` no se manda en el `SET`: lo avanza `app_bump_version()` (trigger,
+ * `0005_projects.sql`) en cada `UPDATE` exitoso, nunca la aplicación. Cero
+ * filas devueltas significa que `version` ya no es `expectedVersion` — el
+ * handler ya confirmó que la tarea existe antes de llegar acá (con un
+ * `findTaskById` propio), así que acá un resultado vacío es siempre una
+ * carrera de concurrencia, nunca "no existe".
+ */
+export async function updateTaskStatus(
+  tx: Tx,
+  params: UpdateTaskStatusParams,
+): Promise<TaskRow | null> {
+  const result = await tx.execute<TaskRowSql>(sql`
+    update task
+    set status = ${params.toStatus},
+        actual_end_at = case
+          when ${params.setsActualEndAt} then now()
+          when ${params.clearsActualEndAt} then null
+          else actual_end_at
+        end
+    where id = ${params.taskId}
+      and organization_id = ${params.organizationId}
+      and version = ${params.expectedVersion}
+    returning *, nlevel(path) as depth
+  `);
+  const row = result.rows[0];
+  return row ? mapTaskRow(row) : null;
+}

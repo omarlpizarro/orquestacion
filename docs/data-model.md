@@ -461,7 +461,7 @@ CREATE TABLE task_update (
   created_by_member_id  text NOT NULL,
   task_id               uuid NOT NULL,
   kind                  text NOT NULL CHECK (kind IN
-                          ('comment','status_change','block_report','evidence','system')),
+                          ('comment','status_change','block_report','evidence','system','reopen')),
   body                  text,
   metadata              jsonb NOT NULL DEFAULT '{}',
   edited_at             timestamptz,
@@ -470,6 +470,8 @@ CREATE TABLE task_update (
 ```
 
 Columnas estándar (CLAUDE.md §6), como cualquier otra tabla de negocio — esta sección se escribió antes de fijar esa convención y todavía tenía `author_member_id` (nulable) y `client_mutation_id` (`UNIQUE` propio) en vez de `created_by_member_id`/`mutation_log`. Corregido: la idempotencia de crear un `task_update` pasa por `mutation_log`, igual que cualquier otra mutación (ADR-007), sin columna propia. `edited_at` es distinto de `updated_at`: marca cuándo el autor editó el texto de su propia novedad, no cualquier cambio de fila.
+
+`reopen` (migración `0007`) es el `kind` del `task_update` que deja constancia de reabrir una tarea `done` (ADR-012), simétrico a `block_report` para bloquear: en ambos casos el dominio exige un motivo (`resolveTaskStatusTransition`, `ReasonRequiredError`) y `body` lo guarda. El resto de las transiciones de estado que no exigen motivo generan un `task_update` de tipo `status_change` con `body` nulo y `metadata: { from, to }` — un registro legible para la bitácora de la tarea, distinto del que ya deja `audit_log` a nivel de fila.
 
 `created_by_member_id` es `NOT NULL` como en el resto de las tablas — pendiente sin resolver: las entradas de tipo `system` ("la tarea se reprogramó por cascada") no tienen un miembro humano detrás. Ninguna funcionalidad de la fase 2 actual escribe ese tipo de fila (aparece recién con la reprogramación en cascada, fase 5), así que se difiere: hay que decidir un valor — miembro de sistema reservado, o relajar la columna a nulable para ese caso — cuando se implemente esa fase.
 

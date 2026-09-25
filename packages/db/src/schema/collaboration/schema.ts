@@ -47,9 +47,13 @@ export const taskUpdate = pgTable(
       table.taskId,
       table.createdAt.desc(),
     ),
+    // `reopen` se agrega en la migración 0007 (change-task-status, ADR-012):
+    // igual que `block_report`, es el `kind` del `task_update` que deja
+    // constancia del motivo de una transición que lo exige — acá, reabrir
+    // una tarea `done`.
     check(
       'task_update_kind_check',
-      sql`${table.kind} in ('comment','status_change','block_report','evidence','system')`,
+      sql`${table.kind} in ('comment','status_change','block_report','evidence','system','reopen')`,
     ),
   ],
 );

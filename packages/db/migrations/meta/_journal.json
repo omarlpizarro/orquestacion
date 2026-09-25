@@ -50,6 +50,13 @@
       "when": 1790374159172,
       "tag": "0006_collaboration",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790375827399,
+      "tag": "0007_task_update_reopen_kind",
+      "breakpoints": true
     }
   ]
 }
