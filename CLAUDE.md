@@ -375,6 +375,13 @@ Confirmar antes de implementar lo que dependa de ellas:
    devuelve el resultado anterior en silencio, sin avisar del mismatch. Falta
    decidir si eso alcanza (es la semántica que ADR-007 ya documenta) o si hace
    falta guardar un hash del payload y rechazar el reintento si no coincide.
+7. `task_update.created_by_member_id` para entradas de tipo `system`: la
+   columna es `NOT NULL` como en cualquier tabla de negocio, pero un
+   `task_update` generado por un proceso automático (reprogramación en
+   cascada, fase 5) no tiene un miembro humano detrás. Ninguna funcionalidad
+   de fase 2 escribe ese tipo de fila, así que queda diferido: definir un
+   miembro de sistema reservado, o relajar la columna a nulable para ese
+   caso, cuando se implemente la fase que de verdad lo necesita.
 
 ---
 
