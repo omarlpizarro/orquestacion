@@ -30,6 +30,10 @@ El mismo hueco cruza la máquina de estados (PR 2): `resolveTaskStatusTransition
 
 Decisión pendiente sobre la máquina de estados: si hace falta `in_review → blocked` con motivo. Hoy un problema detectado en revisión solo puede volver a `in_progress`, y solo lo puede hacer gerencia (`MANAGEMENT_ROLES`) — no hay un camino directo a `blocked` desde `in_review`. Evaluar antes de cerrar la fase si ese caso aparece en la práctica y, si aparece, si conviene agregarlo o si volver primero a `in_progress` alcanza.
 
+Pendiente, bloqueante para el slice de asignación: ningún `member_id` se valida contra la organización. `task.assignee_member_id`, `task.created_by_member_id` y `task_update.created_by_member_id` son `text` sin FK ni chequeo de aplicación — hoy se puede asignar una tarea a un miembro de otro tenant, la fila se crea sin error, y esa persona simplemente nunca la ve porque RLS se lo impide en su propia sesión. Es un agujero de integridad silencioso, no uno de aislamiento (RLS sigue protegiendo los datos), pero deja asignaciones huérfanas sin ningún aviso. Evaluar una FK simple contra `auth.member(id)` más la validación de pertenencia a la organización en la capa de aplicación (la FK sola no alcanza: no impide asignar a un miembro real pero de otra organización). Tiene que estar resuelto antes de implementar el slice de asignación de responsables, no después.
+
+Pendiente: agregar a `task_update` un `CHECK (kind NOT IN ('block_report','comment') OR body IS NOT NULL)`. El dominio ya exige un motivo para bloquear (`resolveTaskStatusTransition`, `ReasonRequiredError`), pero eso es una regla de aplicación, no una invariante de la base — hoy nada impide insertar un `block_report` (o un `comment`) sin `body` si algún camino futuro escribe directo a la tabla sin pasar por ese chequeo.
+
 Requisitos transversales de cada slice. Ninguno se da por terminado sin esto:
 
 Acepta client_mutation_id.
