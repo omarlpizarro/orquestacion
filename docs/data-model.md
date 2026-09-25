@@ -452,25 +452,26 @@ Son dos cosas distintas que suelen confundirse. `task_update` es lo que la gente
 
 ```sql
 CREATE TABLE task_update (
-  id                uuid PRIMARY KEY,
-  organization_id   text NOT NULL,
-  task_id           uuid NOT NULL,
-  author_member_id  text,
-  kind              text NOT NULL CHECK (kind IN
-                      ('comment','status_change','block_report','evidence','system')),
-  body              text,
-  metadata          jsonb NOT NULL DEFAULT '{}',
-  client_mutation_id uuid UNIQUE,
-  created_at        timestamptz NOT NULL DEFAULT now(),
-  edited_at         timestamptz,
-  deleted_at        timestamptz,
+  id                    uuid PRIMARY KEY,
+  organization_id       text NOT NULL,
+  created_at            timestamptz NOT NULL DEFAULT now(),
+  updated_at            timestamptz NOT NULL DEFAULT now(),
+  deleted_at            timestamptz,
+  version               integer NOT NULL DEFAULT 1,
+  created_by_member_id  text NOT NULL,
+  task_id               uuid NOT NULL,
+  kind                  text NOT NULL CHECK (kind IN
+                          ('comment','status_change','block_report','evidence','system')),
+  body                  text,
+  metadata              jsonb NOT NULL DEFAULT '{}',
+  edited_at             timestamptz,
   FOREIGN KEY (organization_id, task_id) REFERENCES task (organization_id, id)
 );
 ```
 
-`client_mutation_id` es la clave de idempotencia de la sincronización offline: el móvil lo genera al crear la novedad, y si reintenta el envío tras perder señal, el `UNIQUE` evita el duplicado sin lógica extra.
+Columnas estándar (CLAUDE.md §6), como cualquier otra tabla de negocio — esta sección se escribió antes de fijar esa convención y todavía tenía `author_member_id` (nulable) y `client_mutation_id` (`UNIQUE` propio) en vez de `created_by_member_id`/`mutation_log`. Corregido: la idempotencia de crear un `task_update` pasa por `mutation_log`, igual que cualquier otra mutación (ADR-007), sin columna propia. `edited_at` es distinto de `updated_at`: marca cuándo el autor editó el texto de su propia novedad, no cualquier cambio de fila.
 
-`author_member_id` es nulable para las entradas de tipo `system` ("la tarea se reprogramó por cascada").
+`created_by_member_id` es `NOT NULL` como en el resto de las tablas — pendiente sin resolver: las entradas de tipo `system` ("la tarea se reprogramó por cascada") no tienen un miembro humano detrás. Ninguna funcionalidad de la fase 2 actual escribe ese tipo de fila (aparece recién con la reprogramación en cascada, fase 5), así que se difiere: hay que decidir un valor — miembro de sistema reservado, o relajar la columna a nulable para ese caso — cuando se implemente esa fase.
 
 ### Adjuntos
 
@@ -967,15 +968,16 @@ slices siguientes contra una conexión que en los hechos ignora las policies.
 | `0003` | `tenancy` | `organization_profile`, `site`, `member_site_access`, `guest_link` | Hecha |
 | `0004` | `mutation_log` | `mutation_log`, adelantada desde `0012` (ADR-007: la idempotencia se adelanta a fase 2, igual que roles/RLS se adelantó a fase 1) | Hecha |
 | `0005` | `projects` | `project`, `task`, triggers de `path` y `version` (`app_bump_version()`/`app_apply_version_triggers()`, `task_maintain_path()`) | Hecha |
-| `0006` | `templates` | `sop_template`, `sop_template_task` | Pendiente |
-| `0007` | `custom_fields` | `custom_field_definition`, índices GIN | Pendiente |
-| `0008` | `resources` | `resource`, `resource_booking` con la exclusion constraint | Pendiente |
-| `0009` | `dependencies` | `task_dependency`, función anti-ciclos, `schedule_change` | Pendiente |
-| `0010` | `collaboration` | `task_update`, `attachment`, `task_acknowledgement` | Pendiente |
-| `0011` | `audit` | `audit_log` particionada, `audit_trigger()`, `REVOKE` | Pendiente |
-| `0012` | `notifications` | `notification`, `notification_preference`, `escalation_policy` | Pendiente |
-| `0013` | `sync` | Publicación lógica, `wal_level` (ya no `mutation_log`, adelantada a `0004`) | Pendiente |
-| `0014` | `billing` | `plan`, `subscription`, `payment_event`, `usage_counter` | Pendiente |
+| `0006` | `collaboration` | `task_update`, adelantada desde `0010` — solo esta tabla, para que `projects` (máquina de estados, ADR-012) tenga dónde escribir el motivo de un bloqueo o una reapertura. `attachment`/`task_acknowledgement` quedan en `0011` | Hecha |
+| `0007` | `templates` | `sop_template`, `sop_template_task` | Pendiente |
+| `0008` | `custom_fields` | `custom_field_definition`, índices GIN | Pendiente |
+| `0009` | `resources` | `resource`, `resource_booking` con la exclusion constraint | Pendiente |
+| `0010` | `dependencies` | `task_dependency`, función anti-ciclos, `schedule_change` | Pendiente |
+| `0011` | `collaboration` (resto) | `attachment`, `task_acknowledgement` | Pendiente |
+| `0012` | `audit` | `audit_log` particionada, `audit_trigger()`, `REVOKE` | Pendiente |
+| `0013` | `notifications` | `notification`, `notification_preference`, `escalation_policy` | Pendiente |
+| `0014` | `sync` | Publicación lógica, `wal_level` (ya no `mutation_log`, adelantada a `0004`) | Pendiente |
+| `0015` | `billing` | `plan`, `subscription`, `payment_event`, `usage_counter` | Pendiente |
 | `0015` | `analytics` | `project_kpi` materializada y su job de refresco | Pendiente |
 | `0016` | `seed` | Planes, plantillas SOP por industria, catálogos iniciales | Pendiente |
 
@@ -992,3 +994,5 @@ Esta lista se mantiene igual en `CLAUDE.md` §13; si las dos alguna vez difieren
 3. **Reservas sin conexión.** El esquema las permite como `tentative`. La alternativa es prohibir reservar offline, que es más simple y menos útil.
 4. **Retención del audit log.** La partición mensual necesita un número. Doce meses cubre la mayoría de los casos; salud y minería pueden requerir más por normativa.
 5. **Sitios obligatorios u opcionales.** `project.site_id` sigue nulable — **no** se cerró en fase 2. Lo único que fase 2 definió fue un fallback de zona horaria para cuando es nulo (`organization_profile.timezone`, ver ADR-008 y la nota en la sección de `project`); sigue pendiente si conviene hacerlo `NOT NULL` para simplificar el RBAC por alcance.
+6. **Idempotencia de mutaciones con payload distinto bajo el mismo `client_mutation_id`.** Hoy `mutation_log` no guarda un hash del request, así que un reintento con el mismo `client_mutation_id` pero datos distintos devuelve el resultado anterior en silencio, sin avisar del mismatch. Falta decidir si eso alcanza (es la semántica que ADR-007 ya documenta) o si hace falta guardar un hash del payload y rechazar el reintento si no coincide.
+7. **`task_update.created_by_member_id` para entradas de tipo `system`.** La columna es `NOT NULL` como en cualquier tabla de negocio, pero un `task_update` generado por un proceso automático (por ejemplo, la reprogramación en cascada de fase 5) no tiene un miembro humano detrás. Ninguna funcionalidad de fase 2 escribe ese tipo de fila, así que queda diferido: definir un miembro de sistema reservado, o relajar la columna a nulable para ese caso, cuando se implemente la fase que de verdad lo necesita.
