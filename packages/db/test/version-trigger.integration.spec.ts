@@ -12,6 +12,14 @@ import { type PostgresHarness, startPostgresHarness } from '../src/testing/postg
  * Se prueba acá con una tabla de prueba, no contra `task`/`project`: esas
  * tienen FK a `auth.organization`, y este mecanismo es genérico — no hace
  * falta una organización real de Better Auth para probarlo.
+ *
+ * Usa `harness.ownerDb`, no `app_login` (CLAUDE.md §7 exige `app_login` para
+ * todo acceso a datos): necesita correr el `CREATE TABLE` de la tabla de
+ * prueba, DDL que `app_login` no tiene permiso de ejecutar, y esa tabla no
+ * lleva `organization_id`, así que no hay ninguna policy de RLS en juego acá.
+ * Es la excepción por lo que se está probando (un trigger genérico, no una
+ * tabla de negocio), no el patrón a copiar: cualquier test que ejercite datos
+ * de una tabla real de negocio va con `app_login`.
  */
 describe('app_bump_version', () => {
   let harness: PostgresHarness;

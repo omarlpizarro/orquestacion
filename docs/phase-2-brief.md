@@ -26,6 +26,10 @@ No entra, aunque el modelado lo sugiera: dependencias entre tareas, hitos, repro
 
 Alcance por sitio, pendiente y explícito: `task:create` (agregado en PR 1) no consulta `member_site_access` — hoy un manager puede crear tareas en proyectos de cualquier sitio de la organización, no solo los que tiene asignados. Es un agujero de autorización real, no un detalle. Tiene que resolverse antes de cerrar la fase, junto con cualquier otra capacidad de `manager` que la revisión de cada PR identifique con el mismo problema — no alcanza con resolverlo solo para `task:create` si aparecen más.
 
+El mismo hueco cruza la máquina de estados (PR 2): `resolveTaskStatusTransition` (`apps/api/src/modules/projects/domain/task-status-transitions.ts`) hoy deja transicionar a un `operator` solo si es el `assignee_member_id` de la tarea, así que no puede bloquear una tarea todavía sin asignar — que es justamente el caso de campo que motivó agregar `pending → blocked`. Cuando se implemente el alcance por sitio, la regla para `operator` tiene que evaluar "es el asignado, o la tarea es de un sitio al que tiene acceso y no tiene asignado", no solo "es el asignado".
+
+Decisión pendiente sobre la máquina de estados: si hace falta `in_review → blocked` con motivo. Hoy un problema detectado en revisión solo puede volver a `in_progress`, y solo lo puede hacer gerencia (`MANAGEMENT_ROLES`) — no hay un camino directo a `blocked` desde `in_review`. Evaluar antes de cerrar la fase si ese caso aparece en la práctica y, si aparece, si conviene agregarlo o si volver primero a `in_progress` alcanza.
+
 Requisitos transversales de cada slice. Ninguno se da por terminado sin esto:
 
 Acepta client_mutation_id.

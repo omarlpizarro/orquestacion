@@ -225,6 +225,8 @@ Los cinco estados de RF-E1 están más `cancelled`, que el documento original no
 
 Las transiciones válidas se validan en la capa de aplicación con una máquina de estados explícita, no con un trigger. Un trigger que rechaza una transición produce un error de base opaco a 200 km del frente de obra; un guard de aplicación devuelve un mensaje que el operario entiende.
 
+`cancelled` es terminal; `done` no lo es (ADR-012): se puede reabrir a `in_progress`, con motivo obligatorio y solo para roles de gerencia, porque cerrar una tarea por error es habitual en campo y una tarea nueva perdería la bitácora y los adjuntos de la original.
+
 ### Plantillas SOP
 
 Una plantilla es un árbol de tareas con tiempos relativos, no fechas:
@@ -804,6 +806,24 @@ Un reintento tras perder señal encuentra su propio id y devuelve el resultado a
 La base de origen necesita `wal_level = logical` y una publicación para las tablas sincronizadas. El bucket storage de PowerSync va en una base Postgres separada, que puede vivir en la misma instancia pero no en la misma base: su carga de escritura es distinta y conviene poder moverla sin tocar la aplicación.
 
 Las sync rules son código versionado y desplegado, y su despliegue recalcula los buckets. Un cambio de sync rules en producción es una operación con costo, no un ajuste de configuración: se prueba en staging primero.
+
+### `updated_at` no sirve como cursor de sincronización
+
+`now()` en Postgres devuelve el instante de inicio de la transacción, no el del
+commit: todas las llamadas a `now()` dentro de la misma transacción ven el mismo
+valor, sin importar cuánto dure. Una transacción larga puede escribir su fila con
+un `updated_at` anterior al de otra transacción que empezó después pero commiteó
+antes.
+
+Si PowerSync (o cualquier consumidor) arma un cursor de sincronización del tipo
+"traeme todo lo que tenga `updated_at` mayor al último corte", una fila así queda
+por debajo del corte cuando su commit se hace visible, y el cursor la salta
+silenciosamente. No se arregla usando `clock_timestamp()` en vez de `now()`
+(eso resuelve el instante, no el orden de visibilidad entre transacciones
+concurrentes) — hace falta un número de secuencia monótono, asignado por
+commit, que las sync rules puedan usar como cursor en vez de `updated_at`. Queda
+pendiente decidirlo cuando se implemente PowerSync en la fase 4 (§14 de
+`CLAUDE.md`).
 
 ## Índices, rendimiento y crecimiento
 
