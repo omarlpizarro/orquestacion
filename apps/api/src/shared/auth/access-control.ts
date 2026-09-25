@@ -65,6 +65,14 @@ export const organizationRoles = {
  * (`member.role`, ver `crud-members.mjs`); alcanza con que uno solo
  * autorice. Un rol que no existe en `organizationRoles` (dato corrupto,
  * nunca de un flujo propio) no autoriza nada — no explota.
+ *
+ * Esto vale para una capacidad gruesa ("puede crear tareas sí/no"), donde
+ * no importa cuál de los roles fue el que autorizó. No es la respuesta
+ * correcta en todos lados: `parseSingleOrgRole`
+ * (`modules/projects/domain/task-status.ts`) usa el rol para más de un
+ * chequeo a la vez (qué transiciones permite, si `isAssignee` aplica), así
+ * que ahí "alcanza con que uno autorice" no tiene una única respuesta —
+ * falla fuerte en vez de elegir en silencio cuál rol usar.
  */
 export function hasCapability(
   memberRole: string,
