@@ -230,7 +230,10 @@ function mapMyDayTaskRow(row: MyDayTaskRowSql): MyDayTaskRow {
  * más `deleted_at` porque el índice es parcial `WHERE deleted_at IS NULL`)
  * y calcula `section` con un `CASE` — `null` para lo que no entra a
  * ninguna sección — e `is_overdue` como expresión aparte, independiente de
- * `section` (una tarea puede ser `blocked` y estar vencida a la vez). La
+ * `section` (una tarea puede ser `blocked` y estar vencida a la vez). Toda
+ * `in_progress` no vencida cae en `today` sin mirar sus fechas (si un
+ * operario ya está haciendo algo, no puede desaparecer de Mi Día porque
+ * estaba agendado para mañana — docs/phase-2-brief.md, "Mi Día"). La
  * consulta externa descarta lo que no clasificó (`section is not null`) y
  * ordena: primero por sección (vencidas, hoy, bloqueadas, sin fecha),
  * después por el criterio de cada una. El `CASE ... end` sin `else`
@@ -253,8 +256,7 @@ export function buildMyDayTaskQuery(params: FindMyDayTaskRowsParams) {
         case
           when status = 'blocked' then 'blocked'
           when planned_end_at is not null and planned_end_at < now() then 'overdue'
-          when status = 'in_progress' and planned_start_at is null and planned_end_at is null
-            then 'today'
+          when status = 'in_progress' then 'today'
           when coalesce(planned_start_at, planned_end_at) < ${params.todayEndUtc}
             and coalesce(planned_end_at, planned_start_at) >= ${params.todayStartUtc}
             then 'today'
@@ -277,8 +279,8 @@ export function buildMyDayTaskQuery(params: FindMyDayTaskRowsParams) {
         when 'undated' then 3
       end,
       -- Criticidad: aplica a vencidas, bloqueadas y sin fecha; en "hoy" el
-      -- orden es solo por planned_start_at, así que acá da null para esas
-      -- filas y no participa del desempate.
+      -- orden es por coalesce(planned_start_at, planned_end_at), así que
+      -- acá da null para esas filas y no participa del desempate.
       case when section <> 'today' then
         case criticality
           when 'critical' then 0
@@ -287,7 +289,7 @@ export function buildMyDayTaskQuery(params: FindMyDayTaskRowsParams) {
           else 3
         end
       end,
-      case section when 'today' then planned_start_at end,
+      case section when 'today' then coalesce(planned_start_at, planned_end_at) end,
       case when section in ('overdue', 'blocked') then planned_end_at end,
       case section when 'undated' then created_at end,
       id

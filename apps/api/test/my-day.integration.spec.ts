@@ -372,4 +372,70 @@ describe('GET /projects/tasks/my-day (integración)', () => {
 
     expect(ordered.map((task) => task.id)).toEqual([earlier, later, noStart]);
   });
+
+  it('dentro de hoy, una tarea con solo planned_end_at a la mañana queda antes que una con solo planned_start_at a la tarde', async () => {
+    // "A la mañana"/"a la tarde": acotado a lo que quede de hoy en la zona
+    // de la organización, con el mismo cuidado que en los tests anteriores.
+    // La de la mañana va con planned_end_at nada más (sin start) — tiene
+    // que quedar en el futuro, porque si quedara en el pasado la marcaría
+    // vencida en vez de probar el orden dentro de "hoy".
+    const orgWindow = localDayWindow(new Date(), 'America/Argentina/Buenos_Aires');
+    const beforeTodayEnds = new Date(orgWindow.endUtc).getTime() - 60_000;
+    const morningAt = new Date(
+      Math.min(Date.now() + 10 * 60_000, beforeTodayEnds - 2 * 60_000),
+    ).toISOString();
+    const afternoonAt = new Date(
+      Math.min(Date.now() + 2 * 60 * 60_000, beforeTodayEnds),
+    ).toISOString();
+
+    const onlyEndMorning = await insertTask({
+      assigneeMemberId: memberId,
+      title: 'Hoy a la mañana, solo planned_end_at',
+      status: 'pending',
+      plannedEndAt: morningAt,
+    });
+    const onlyStartAfternoon = await insertTask({
+      assigneeMemberId: memberId,
+      title: 'Hoy a la tarde, solo planned_start_at',
+      status: 'pending',
+      plannedStartAt: afternoonAt,
+    });
+
+    const response = await getMyDay(cookie);
+    expect(response.statusCode, response.body).toBe(200);
+    const ordered = pickTasks(response.json<{ tasks: Array<{ id: string }> }>().tasks, [
+      onlyEndMorning,
+      onlyStartAfternoon,
+    ]);
+
+    expect(ordered.map((task) => task.id)).toEqual([onlyEndMorning, onlyStartAfternoon]);
+  });
+
+  it('una in_progress con ventana agendada para mañana aparece en today, no vencida', async () => {
+    const orgWindow = localDayWindow(new Date(), 'America/Argentina/Buenos_Aires');
+    const tomorrowStart = new Date(
+      new Date(orgWindow.endUtc).getTime() + 60 * 60 * 1000,
+    ).toISOString();
+    const tomorrowEnd = new Date(
+      new Date(orgWindow.endUtc).getTime() + 3 * 60 * 60 * 1000,
+    ).toISOString();
+
+    const scheduledForTomorrow = await insertTask({
+      assigneeMemberId: memberId,
+      title: 'En curso, agendada para mañana',
+      status: 'in_progress',
+      plannedStartAt: tomorrowStart,
+      plannedEndAt: tomorrowEnd,
+    });
+
+    const response = await getMyDay(cookie);
+    expect(response.statusCode, response.body).toBe(200);
+    const byId = new Map(
+      response
+        .json<{ tasks: Array<{ id: string; section: string; is_overdue: boolean }> }>()
+        .tasks.map((task) => [task.id, task]),
+    );
+
+    expect(byId.get(scheduledForTomorrow)).toMatchObject({ section: 'today', is_overdue: false });
+  });
 });
