@@ -238,6 +238,28 @@ describe('regla fija: pasar a blocked exige motivo', () => {
     expect(transition.requiresReason).toBe('block_report');
   });
 
+  it('devuelve el motivo recortado de espacios al borde, no el que mandó el caller tal cual', () => {
+    const transition = resolveTaskStatusTransition({
+      from: 'in_progress',
+      to: 'blocked',
+      role: 'operator',
+      isAssignee: true,
+      reason: '  Falta el permiso municipal  ',
+    });
+    expect(transition.reason).toBe('Falta el permiso municipal');
+  });
+
+  it('reason es null cuando la transición no exige motivo, aunque el caller mande uno', () => {
+    const transition = resolveTaskStatusTransition({
+      from: 'pending',
+      to: 'in_progress',
+      role: 'operator',
+      isAssignee: true,
+      reason: 'Un motivo que esta transición no pidió',
+    });
+    expect(transition.reason).toBeNull();
+  });
+
   it('pending -> blocked (no se pudo ni empezar) también exige motivo', () => {
     expect(() =>
       resolveTaskStatusTransition({

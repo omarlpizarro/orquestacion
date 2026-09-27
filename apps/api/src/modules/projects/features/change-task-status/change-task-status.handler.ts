@@ -10,11 +10,15 @@ import { TransactionService } from '../../../../shared/database/transaction.serv
 import { domainEvents } from '../../../../shared/domain-events/domain-events.js';
 import type { TenantIdentity } from '../../../../shared/request-context/request-context.js';
 import { getRequestContext } from '../../../../shared/request-context/request-context.js';
-import { CollaborationService } from '../../../collaboration/collaboration.module.js';
+import {
+  CollaborationService,
+  type TaskUpdateKind,
+} from '../../../collaboration/collaboration.module.js';
 import { TaskNotFoundError } from '../../domain/errors/task-not-found.error.js';
 import { TaskVersionMismatchError } from '../../domain/errors/task-version-mismatch.error.js';
 import {
   parseSingleOrgRole,
+  type ReasonKind,
   resolveTaskStatusTransition,
   type TaskStatus,
 } from '../../domain/task-status-transitions.js';
@@ -25,6 +29,19 @@ import {
 } from '../../infrastructure/task.repository.js';
 import { toTaskOutput } from '../../infrastructure/task-output.mapper.js';
 import type { ChangeTaskStatusCommand } from './change-task-status.command.js';
+
+/**
+ * `ReasonKind` (dominio de `projects`) y `TaskUpdateKind` (`collaboration`)
+ * son dos tipos distintos que hoy comparten los mismos nombres de valor.
+ * Un `Record` explícito, en vez de `transition.requiresReason ?? 'status_change'`
+ * pasado directo como `kind`, hace que agregar un `ReasonKind` nuevo sin
+ * agregarlo acá (o sin que ese valor exista también en `TaskUpdateKind`)
+ * falle al compilar — no en runtime contra `task_update_kind_check`.
+ */
+const REASON_KIND_TO_TASK_UPDATE_KIND: Record<ReasonKind, TaskUpdateKind> = {
+  block_report: 'block_report',
+  reopen: 'reopen',
+};
 
 @Injectable()
 export class ChangeTaskStatusHandler {
@@ -133,8 +150,10 @@ export class ChangeTaskStatusHandler {
       organizationId: tenant.organizationId,
       createdByMemberId: tenant.memberId,
       taskId: command.id,
-      kind: transition.requiresReason ?? 'status_change',
-      body: transition.requiresReason ? (command.reason as string) : null,
+      kind: transition.requiresReason
+        ? REASON_KIND_TO_TASK_UPDATE_KIND[transition.requiresReason]
+        : 'status_change',
+      body: transition.reason,
       metadata: { from: current.status, to: command.to_status },
     });
 
