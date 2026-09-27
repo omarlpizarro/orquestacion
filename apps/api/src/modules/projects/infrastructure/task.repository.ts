@@ -186,6 +186,58 @@ export async function findTaskById(
   return row ? mapTaskRow(row) : null;
 }
 
+export interface FindMyDayTaskRowsParams {
+  organizationId: string;
+  assigneeMemberId: string;
+  /** Mismo instante para "vencida" y para resolver la ventana de "hoy" — ver `domain/my-day.ts`. */
+  nowUtc: string;
+  todayStartUtc: string;
+  todayEndUtc: string;
+}
+
+/**
+ * El `WHERE` de acá tiene que reflejar exactamente las condiciones que
+ * `classifyMyDayTask` (`domain/my-day.ts`) sabe clasificar — si una fila
+ * pasa este filtro pero no encaja en ninguna sección, esa función explota
+ * a propósito en vez de perderla en silencio. Usa el índice parcial
+ * `task_org_assignee_status_planned_end_idx` (`organization_id,
+ * assignee_member_id, status, planned_end_at) WHERE deleted_at IS NULL`.
+ * Sin `ORDER BY`: el orden final (secciones + criticidad + fecha) lo arma
+ * `sortMyDayTasks` en JS, no acá.
+ *
+ * Exportada (no solo usada internamente) para que el test de rendimiento
+ * (`test/my-day-performance.integration.spec.ts`) le anteponga
+ * `EXPLAIN` a esta misma consulta, exacta — nunca a una copia que podría
+ * desincronizarse de la real.
+ */
+export function buildMyDayTaskQuery(params: FindMyDayTaskRowsParams) {
+  return sql`
+    select *, nlevel(path) as depth from task
+    where organization_id = ${params.organizationId}
+      and assignee_member_id = ${params.assigneeMemberId}
+      and deleted_at is null
+      and status not in ('done', 'cancelled')
+      and (
+        status = 'blocked'
+        or (planned_end_at is not null and planned_end_at < ${params.nowUtc})
+        or (status = 'in_progress' and planned_start_at is null and planned_end_at is null)
+        or (status = 'pending' and planned_start_at is null and planned_end_at is null)
+        or (
+          coalesce(planned_start_at, planned_end_at) < ${params.todayEndUtc}
+          and coalesce(planned_end_at, planned_start_at) >= ${params.todayStartUtc}
+        )
+      )
+  `;
+}
+
+export async function findMyDayTaskRows(
+  tx: Tx,
+  params: FindMyDayTaskRowsParams,
+): Promise<TaskRow[]> {
+  const result = await tx.execute<TaskRowSql>(buildMyDayTaskQuery(params));
+  return result.rows.map(mapTaskRow);
+}
+
 export interface UpdateTaskStatusParams {
   organizationId: string;
   taskId: string;

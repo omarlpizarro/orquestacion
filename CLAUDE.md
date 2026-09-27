@@ -210,6 +210,53 @@ Detalle completo en `docs/data-model.md`. Lo mínimo que tenés que respetar sie
   `no-cross-module-schema`): si un módulo importara el objeto de tabla de
   otro para usar el query builder, la regla lo bloquea recién ahí, pero con
   SQL crudo el problema ni se plantea — nada que importar.
+- **Ningún índice se crea con `CREATE INDEX CONCURRENTLY` a través de
+  `pnpm db:migrate`.** Verificado, no supuesto
+  (`packages/db/node_modules/drizzle-orm/pg-core/dialect.js:60`,
+  `PgDialect.migrate`): igual que con `NOT VALID` más abajo, el migrador
+  envuelve **todas** las migraciones pendientes de una corrida en un único
+  `session.transaction(...)`, sin excepción por archivo ni por contenido —
+  se revisó `migrate()` completo, no hay flag de configuración ni un pragma
+  tipo `-- disable-transaction` que saque una migración puntual de esa
+  transacción. Postgres rechaza `CREATE INDEX CONCURRENTLY` dentro de un
+  bloque de transacción (error `25001`), así que cualquier migración que la
+  use falla apenas se aplica. No es un riesgo de lock como con `NOT VALID`:
+  es un error duro, siempre, tabla vacía o no.
+
+  Ojo con la trampa: el schema builder de Drizzle sí tiene un método
+  `.concurrently()` en `index(...)`
+  (`packages/db/node_modules/drizzle-orm/pg-core/indexes.d.ts`), y
+  `drizzle-kit generate` sí lo traduce a `CREATE INDEX CONCURRENTLY` en el
+  SQL generado — verificado en
+  `packages/db/node_modules/drizzle-kit/api.js:15019`. Parece una salida,
+  pero no lo es: ese SQL corre igual que cualquier otro, dentro de la misma
+  transacción de la corrida. No lo uses.
+
+  Mientras una tabla de negocio no tenga filas (todas las de este repo,
+  hoy), un `CREATE INDEX` normal es instantáneo y no hace falta nada de
+  esto — es lo que hacen las migraciones actuales. La convención de abajo es
+  para cuando una tabla ya tenga datos en producción y haya que agregarle un
+  índice sin tomar un lock exclusivo largo:
+
+  1. Un script aparte (no una migración de `drizzle-kit`), conectado con las
+     credenciales de `app_owner` (las mismas que usa el migrador) pero sin
+     pasar por `migrate()`: un `Pool`/`Client` de `pg` corriendo
+     `CREATE INDEX CONCURRENTLY IF NOT EXISTS nombre_idx ON tabla (...)`
+     como sentencia suelta, nunca dentro de un `BEGIN`. Se corre a mano (o
+     desde el pipeline de deploy, antes del paso de migraciones) contra
+     producción.
+  2. Una migración normal, generada por `drizzle-kit` a partir del schema
+     actualizado, con `CREATE INDEX IF NOT EXISTS` (sin `CONCURRENTLY` — ya
+     no hace falta, el índice real lo creó el script del paso 1). Cuando
+     esta migración corre por `pnpm db:migrate`, el índice ya existe: el
+     `IF NOT EXISTS` la vuelve un no-op instantáneo, y el historial de
+     `drizzle-kit` queda reconciliado con lo que hay en base.
+
+  El paso 1 tiene que correr antes de que el paso 2 llegue a esa base —
+  mismo tipo de orden entre despliegues que exige la convención de
+  `NOT VALID`. Si `CREATE INDEX CONCURRENTLY` se interrumpe a mitad de
+  camino, Postgres puede dejar un índice `INVALID`: hay que `DROP INDEX` ese
+  índice y reintentar el paso 1, nunca dejarlo así.
 
 ### El caso de las reservas
 
