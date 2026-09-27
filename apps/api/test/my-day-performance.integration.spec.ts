@@ -179,12 +179,10 @@ describe('Mi Día — seed de volumen y EXPLAIN (integración)', () => {
       db,
       { organizationId: targetOrganizationId, memberId: targetMemberId, requestId: newId() },
       async (tx) => {
-        const now = new Date();
-        const dayWindow = localDayWindow(now, 'America/Argentina/Buenos_Aires');
+        const dayWindow = localDayWindow(new Date(), 'America/Argentina/Buenos_Aires');
         const query = buildMyDayTaskQuery({
           organizationId: targetOrganizationId,
           assigneeMemberId: targetMemberId,
-          nowUtc: now.toISOString(),
           todayStartUtc: dayWindow.startUtc,
           todayEndUtc: dayWindow.endUtc,
         });

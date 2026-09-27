@@ -4,7 +4,6 @@ import { TransactionService } from '../../../../shared/database/transaction.serv
 import { getRequestContext } from '../../../../shared/request-context/request-context.js';
 import { TenancyService } from '../../../tenancy/tenancy.module.js';
 import { localDayWindow } from '../../domain/local-day-window.js';
-import { classifyMyDayTask, sortMyDayTasks } from '../../domain/my-day.js';
 import { findMyDayTaskRows } from '../../infrastructure/task.repository.js';
 import { toTaskOutput } from '../../infrastructure/task-output.mapper.js';
 import type { MyDayQuery } from './my-day.query.js';
@@ -22,11 +21,6 @@ export class MyDayHandler {
       throw new Error('my-day requiere una sesión con organización activa.');
     }
 
-    // Mismo instante para todo el request: la ventana de "hoy" y el chequeo
-    // de vencida se calculan una sola vez, no en cada paso por separado
-    // (docs/phase-2-brief.md, "Mi Día y zonas horarias").
-    const nowUtc = new Date();
-
     const tasks = await this.transactions.withTenant(async (tx) => {
       const timeZone =
         query.time_zone ??
@@ -34,24 +28,22 @@ export class MyDayHandler {
           organizationId: tenant.organizationId,
           siteId: null,
         }));
-      const dayWindow = localDayWindow(nowUtc, timeZone);
+      // Qué sección le corresponde a cada tarea y en qué orden se muestran
+      // lo resuelve la consulta (infrastructure/task.repository.ts,
+      // buildMyDayTaskQuery) — acá solo se resuelve la zona horaria de
+      // "hoy" (docs/phase-2-brief.md, "Mi Día y zonas horarias").
+      const dayWindow = localDayWindow(new Date(), timeZone);
 
       return findMyDayTaskRows(tx, {
         organizationId: tenant.organizationId,
         assigneeMemberId: tenant.memberId,
-        nowUtc: nowUtc.toISOString(),
         todayStartUtc: dayWindow.startUtc,
         todayEndUtc: dayWindow.endUtc,
-      }).then((rows) =>
-        rows.map((row) => ({
-          ...row,
-          ...classifyMyDayTask(row, { nowUtc: nowUtc.toISOString(), dayWindow }),
-        })),
-      );
+      });
     });
 
     return {
-      tasks: sortMyDayTasks(tasks).map((task) => ({
+      tasks: tasks.map((task) => ({
         ...toTaskOutput(task),
         section: task.section,
         is_overdue: task.isOverdue,

@@ -80,6 +80,7 @@ describe('GET /projects/tasks/my-day (integración)', () => {
     assigneeMemberId: string;
     title: string;
     status?: string;
+    criticality?: string;
     plannedStartAt?: string | null;
     plannedEndAt?: string | null;
   }
@@ -90,15 +91,22 @@ describe('GET /projects/tasks/my-day (integración)', () => {
       tx.execute(sql`
         insert into task (
           id, organization_id, created_by_member_id, project_id,
-          title, status, assignee_member_id, planned_start_at, planned_end_at, position
+          title, status, criticality, assignee_member_id,
+          planned_start_at, planned_end_at, position
         ) values (
           ${id}, ${organizationId}, ${memberId}, ${projectId},
-          ${fixture.title}, ${fixture.status ?? 'pending'}, ${fixture.assigneeMemberId},
-          ${fixture.plannedStartAt ?? null}, ${fixture.plannedEndAt ?? null}, ${`a${id.slice(0, 8)}`}
+          ${fixture.title}, ${fixture.status ?? 'pending'}, ${fixture.criticality ?? 'normal'},
+          ${fixture.assigneeMemberId}, ${fixture.plannedStartAt ?? null},
+          ${fixture.plannedEndAt ?? null}, ${`a${id.slice(0, 8)}`}
         )
       `),
     );
     return id;
+  }
+
+  /** Filtra la respuesta a solo los IDs de este test, para no depender del estado que dejaron otros. */
+  function pickTasks<T extends { id: string }>(tasks: T[], ids: readonly string[]): T[] {
+    return tasks.filter((task) => ids.includes(task.id));
   }
 
   function getMyDay(requestCookie: string, timeZone?: string) {
@@ -258,5 +266,110 @@ describe('GET /projects/tasks/my-day (integración)', () => {
     expect(
       theirs.json<{ tasks: Array<{ id: string }> }>().tasks.some((t) => t.id === onlyForOther),
     ).toBe(true);
+  });
+
+  it('una tarea que vence en dos horas es "today" y no vencida; una con solo planned_start_at hoy también', async () => {
+    // "En dos horas" acotado a lo que quede de hoy (zona de la
+    // organización): si el test corriera a menos de dos horas de
+    // medianoche, now + 2h ya sería mañana, y dejaría de probar lo mismo.
+    const orgWindow = localDayWindow(new Date(), 'America/Argentina/Buenos_Aires');
+    const twoHoursFromNow = Date.now() + 2 * 60 * 60 * 1000;
+    const beforeTodayEnds = new Date(orgWindow.endUtc).getTime() - 60_000;
+    const dueSoonAt = new Date(Math.min(twoHoursFromNow, beforeTodayEnds)).toISOString();
+
+    const dueSoon = await insertTask({
+      assigneeMemberId: memberId,
+      title: 'Vence en dos horas',
+      status: 'in_progress',
+      plannedEndAt: dueSoonAt,
+    });
+    const startsToday = await insertTask({
+      assigneeMemberId: memberId,
+      title: 'Empieza hoy, sin fecha de fin',
+      status: 'pending',
+      plannedStartAt: new Date().toISOString(),
+    });
+
+    const response = await getMyDay(cookie);
+    expect(response.statusCode, response.body).toBe(200);
+    const byId = new Map(
+      response
+        .json<{ tasks: Array<{ id: string; section: string; is_overdue: boolean }> }>()
+        .tasks.map((task) => [task.id, task]),
+    );
+
+    expect(byId.get(dueSoon)).toMatchObject({ section: 'today', is_overdue: false });
+    expect(byId.get(startsToday)).toMatchObject({ section: 'today', is_overdue: false });
+  });
+
+  it('dentro de vencidas, ordena por criticidad descendente y después por planned_end_at', async () => {
+    const lowLate = await insertTask({
+      assigneeMemberId: memberId,
+      title: 'Vencida, baja, más tarde',
+      status: 'in_progress',
+      criticality: 'low',
+      plannedEndAt: '2020-01-25T00:00:00.000Z',
+    });
+    const criticalEarly = await insertTask({
+      assigneeMemberId: memberId,
+      title: 'Vencida, crítica, antes',
+      status: 'in_progress',
+      criticality: 'critical',
+      plannedEndAt: '2020-01-20T00:00:00.000Z',
+    });
+    const criticalEarlier = await insertTask({
+      assigneeMemberId: memberId,
+      title: 'Vencida, crítica, mucho antes',
+      status: 'in_progress',
+      criticality: 'critical',
+      plannedEndAt: '2020-01-10T00:00:00.000Z',
+    });
+
+    const response = await getMyDay(cookie);
+    expect(response.statusCode, response.body).toBe(200);
+    const ordered = pickTasks(response.json<{ tasks: Array<{ id: string }> }>().tasks, [
+      lowLate,
+      criticalEarly,
+      criticalEarlier,
+    ]);
+
+    expect(ordered.map((task) => task.id)).toEqual([criticalEarlier, criticalEarly, lowLate]);
+  });
+
+  it('dentro de hoy, ordena por planned_start_at con nulls al final', async () => {
+    // Mismo cuidado que en el test de "vence en dos horas": acotado a lo
+    // que quede de hoy en la zona de la organización.
+    const orgWindow = localDayWindow(new Date(), 'America/Argentina/Buenos_Aires');
+    const oneHourFromNow = Date.now() + 60 * 60 * 1000;
+    const beforeTodayEnds = new Date(orgWindow.endUtc).getTime() - 60_000;
+    const laterAt = new Date(Math.min(oneHourFromNow, beforeTodayEnds)).toISOString();
+
+    const noStart = await insertTask({
+      assigneeMemberId: memberId,
+      title: 'Hoy, en curso, sin ninguna fecha',
+      status: 'in_progress',
+    });
+    const later = await insertTask({
+      assigneeMemberId: memberId,
+      title: 'Hoy, empieza más tarde',
+      status: 'pending',
+      plannedStartAt: laterAt,
+    });
+    const earlier = await insertTask({
+      assigneeMemberId: memberId,
+      title: 'Hoy, empieza antes',
+      status: 'pending',
+      plannedStartAt: new Date().toISOString(),
+    });
+
+    const response = await getMyDay(cookie);
+    expect(response.statusCode, response.body).toBe(200);
+    const ordered = pickTasks(response.json<{ tasks: Array<{ id: string }> }>().tasks, [
+      noStart,
+      later,
+      earlier,
+    ]);
+
+    expect(ordered.map((task) => task.id)).toEqual([earlier, later, noStart]);
   });
 });
