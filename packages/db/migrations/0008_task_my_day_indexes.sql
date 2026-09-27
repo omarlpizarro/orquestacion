@@ -1,0 +1,2 @@
+CREATE INDEX "task_org_assignee_status_planned_end_idx" ON "task" USING btree ("organization_id","assignee_member_id","status","planned_end_at") WHERE "task"."deleted_at" is null;--> statement-breakpoint
+CREATE INDEX "task_org_project_parent_idx" ON "task" USING btree ("organization_id","project_id","parent_task_id");

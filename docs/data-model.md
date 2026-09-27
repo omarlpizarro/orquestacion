@@ -836,6 +836,7 @@ Regla general: todo índice de una tabla de negocio arranca con `organization_id
 | --- | --- | --- |
 | `task` | `(organization_id, assignee_member_id, status, planned_end_at)` parcial `WHERE deleted_at IS NULL` | Vista "Mi Día" (RF-C3), la consulta más frecuente del sistema |
 | `task` | `(organization_id, project_id, position)` | Kanban y listado de proyecto |
+| `task` | `(organization_id, project_id, parent_task_id)` | `findLastSiblingPosition` (create-task, PR 1) |
 | `task` | `(organization_id, planned_end_at) WHERE status NOT IN ('done','cancelled')` | Barrido de vencimientos del worker |
 | `task` | `gist (path)` | Subárboles de subtareas |
 | `task` | `gin (custom_fields jsonb_path_ops)` | Filtros por campo personalizado |
@@ -971,19 +972,21 @@ slices siguientes contra una conexión que en los hechos ignora las policies.
 | `0004` | `mutation_log` | `mutation_log`, adelantada desde `0012` (ADR-007: la idempotencia se adelanta a fase 2, igual que roles/RLS se adelantó a fase 1) | Hecha |
 | `0005` | `projects` | `project`, `task`, triggers de `path` y `version` (`app_bump_version()`/`app_apply_version_triggers()`, `task_maintain_path()`) | Hecha |
 | `0006` | `collaboration` | `task_update`, adelantada desde `0010` — solo esta tabla, para que `projects` (máquina de estados, ADR-012) tenga dónde escribir el motivo de un bloqueo o una reapertura. `attachment`/`task_acknowledgement` quedan en `0011` | Hecha |
-| `0007` | `templates` | `sop_template`, `sop_template_task` | Pendiente |
-| `0008` | `custom_fields` | `custom_field_definition`, índices GIN | Pendiente |
-| `0009` | `resources` | `resource`, `resource_booking` con la exclusion constraint | Pendiente |
-| `0010` | `dependencies` | `task_dependency`, función anti-ciclos, `schedule_change` | Pendiente |
-| `0011` | `collaboration` (resto) | `attachment`, `task_acknowledgement` | Pendiente |
-| `0012` | `audit` | `audit_log` particionada, `audit_trigger()`, `REVOKE` | Pendiente |
-| `0013` | `notifications` | `notification`, `notification_preference`, `escalation_policy` | Pendiente |
-| `0014` | `sync` | Publicación lógica, `wal_level` (ya no `mutation_log`, adelantada a `0004`) | Pendiente |
-| `0015` | `billing` | `plan`, `subscription`, `payment_event`, `usage_counter` | Pendiente |
-| `0015` | `analytics` | `project_kpi` materializada y su job de refresco | Pendiente |
-| `0016` | `seed` | Planes, plantillas SOP por industria, catálogos iniciales | Pendiente |
+| `0007` | `task_update_reopen_kind` | Amplía `task_update_kind_check` para admitir `'reopen'` (ADR-012: reabrir una tarea `done` exige motivo, igual que bloquear) | Hecha |
+| `0008` | `task_my_day_indexes` | `(organization_id, assignee_member_id, status, planned_end_at)` parcial `WHERE deleted_at IS NULL` (vista "Mi Día") y `(organization_id, project_id, parent_task_id)` (`findLastSiblingPosition`, faltaba desde `0005`) | Hecha |
+| `0009` | `templates` | `sop_template`, `sop_template_task` | Pendiente |
+| `0010` | `custom_fields` | `custom_field_definition`, índices GIN | Pendiente |
+| `0011` | `resources` | `resource`, `resource_booking` con la exclusion constraint | Pendiente |
+| `0012` | `dependencies` | `task_dependency`, función anti-ciclos, `schedule_change` | Pendiente |
+| `0013` | `collaboration` (resto) | `attachment`, `task_acknowledgement` | Pendiente |
+| `0014` | `audit` | `audit_log` particionada, `audit_trigger()`, `REVOKE` | Pendiente |
+| `0015` | `notifications` | `notification`, `notification_preference`, `escalation_policy` | Pendiente |
+| `0016` | `sync` | Publicación lógica, `wal_level` (ya no `mutation_log`, adelantada a `0004`) | Pendiente |
+| `0017` | `billing` | `plan`, `subscription`, `payment_event`, `usage_counter` | Pendiente |
+| `0018` | `analytics` | `project_kpi` materializada y su job de refresco | Pendiente |
+| `0019` | `seed` | Planes, plantillas SOP por industria, catálogos iniciales | Pendiente |
 
-`0000` a `0011` son la v1. `0012` a `0016` acompañan las fases posteriores, pero conviene escribirlas al mismo tiempo para que el esquema quede coherente de entrada.
+`0000` a `0013` son la v1. `0014` a `0019` acompañan las fases posteriores, pero conviene escribirlas al mismo tiempo para que el esquema quede coherente de entrada.
 
 Regla de operación: ninguna migración hace `DROP COLUMN` en el mismo despliegue que deja de usarla. Primero se deja de escribir, se despliega, se verifica, y recién en un despliegue posterior se borra. Con clientes en el campo que corren versiones viejas de la app móvil, esa disciplina es lo que evita cortes.
 

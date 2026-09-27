@@ -95,6 +95,21 @@ export const task = pgTable(
       table.projectId,
       table.position,
     ),
+    // Vista "Mi Día" (docs/data-model.md, "Índices, rendimiento y
+    // crecimiento"): parcial porque una tarea borrada nunca entra a esa
+    // consulta, y así el índice no carga con filas que jamás se leen por
+    // este camino.
+    index('task_org_assignee_status_planned_end_idx')
+      .on(table.organizationId, table.assigneeMemberId, table.status, table.plannedEndAt)
+      .where(sql`${table.deletedAt} is null`),
+    // findLastSiblingPosition (create-task, PR 1): faltaba desde ese PR, se
+    // agrega acá para no generar una migración que solo agrega un índice
+    // (docs/phase-2-brief.md).
+    index('task_org_project_parent_idx').on(
+      table.organizationId,
+      table.projectId,
+      table.parentTaskId,
+    ),
     check(
       'task_status_check',
       sql`${table.status} in ('pending','in_progress','blocked','in_review','done','cancelled')`,
