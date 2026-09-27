@@ -226,11 +226,13 @@ Detalle completo en `docs/data-model.md`. Lo mínimo que tenés que respetar sie
   **todas** las migraciones pendientes de una corrida en un solo
   `session.transaction(...)`, ejecutando cada archivo `.sql` dentro de ese
   mismo `tx`. Si el `ADD CONSTRAINT ... NOT VALID` y su `VALIDATE CONSTRAINT`
-  quedan pendientes a la vez (por ejemplo, un ambiente que arranca de cero y
-  corre todo junto), los dos terminan en la misma transacción: el lock
-  exclusivo del `ADD` se mantiene hasta el `COMMIT` final, y `VALIDATE`
-  revisa la tabla entera todavía adentro de ese lock — exactamente el
-  problema que `NOT VALID` buscaba evitar. Por eso la regla es la misma que
+  quedan pendientes a la vez (por ejemplo, un ambiente con datos que está
+  atrasado varias migraciones y corre todo junto contra una tabla grande),
+  los dos terminan en la misma transacción: el lock exclusivo del `ADD` se
+  mantiene hasta el `COMMIT` final, y `VALIDATE` revisa la tabla entera
+  todavía adentro de ese lock — exactamente el problema que `NOT VALID`
+  buscaba evitar. Un ambiente que arranca de cero no tiene este riesgo: la
+  tabla está vacía y `VALIDATE` es instantáneo. Por eso la regla es la misma que
   la regla dura 7 de `DROP COLUMN`: el `VALIDATE CONSTRAINT` es una
   migración aparte, para un despliegue posterior, nunca agrupada con el
   `ADD CONSTRAINT ... NOT VALID` en la misma corrida.
@@ -238,18 +240,23 @@ Detalle completo en `docs/data-model.md`. Lo mínimo que tenés que respetar sie
   El `ADD CONSTRAINT ... NOT VALID` en sí sigue pidiendo un lock exclusivo
   breve para registrar la constraint. Si hay una transacción larga abierta
   sobre esa tabla, el pedido de lock queda encolado y bloquea toda consulta
-  que llegue detrás (incluidas lecturas). Anteponer `SET lock_timeout` (en
-  la misma migración, antes del `ALTER TABLE`) hace que falle rápido en vez
-  de congelar la tabla, para reintentarlo después.
+  que llegue detrás (incluidas lecturas). Anteponer `SET LOCAL lock_timeout`
+  (en la misma migración, antes del `ALTER TABLE`) hace que falle rápido en
+  vez de congelar la tabla, para reintentarlo después. `LOCAL` importa
+  adentro de la transacción de Drizzle: un `SET` a secas sobrevive al
+  `COMMIT` y queda pegado a la conexión del pool, afectando queries de otro
+  tenant que la reutilicen después. `SET LOCAL` rige hasta el fin de la
+  corrida, así que alcanza a las migraciones siguientes del mismo *run*.
 
   `drizzle-kit` no sabe generar `NOT VALID`: la migración que genera para
   modificar un `CHECK` (`DROP CONSTRAINT` + `ADD CONSTRAINT` a secas) se
   edita a mano. Para el caso más común, ampliar un `CHECK` ya existente
   (agregar un valor nuevo a la lista), la secuencia es:
 
-  1. `SET lock_timeout = '...'; ALTER TABLE t ADD CONSTRAINT t_check_v2 CHECK (...) NOT VALID;` — la constraint vieja sigue activa, protegiendo.
+  1. `SET LOCAL lock_timeout = '...'; ALTER TABLE t ADD CONSTRAINT t_check_v2 CHECK (...) NOT VALID;` — la constraint vieja sigue activa, protegiendo.
   2. `ALTER TABLE t VALIDATE CONSTRAINT t_check_v2;` — despliegue posterior.
-  3. `ALTER TABLE t DROP CONSTRAINT t_check;` — recién ahora, en un tercer paso.
+  3. `SET LOCAL lock_timeout = '...'; ALTER TABLE t DROP CONSTRAINT t_check;` — recién ahora, en un tercer paso.
+  4. `ALTER TABLE t RENAME CONSTRAINT t_check_v2 TO t_check;` — sin este paso la base queda con el nombre `_v2` mientras el snapshot de `drizzle-kit` conserva el nombre original, y la próxima migración generada que toque esa constraint falla.
 
   Mientras la vieja y la nueva conviven (pasos 1 y 2), la vieja sigue
   rechazando lo que ya rechazaba; nunca hay una ventana sin protección.
