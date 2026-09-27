@@ -34,6 +34,10 @@ Pendiente, bloqueante para el slice de asignación: ningún `member_id` se valid
 
 Pendiente: agregar a `task_update` un `CHECK (kind NOT IN ('block_report','comment') OR body IS NOT NULL)`. El dominio ya exige un motivo para bloquear (`resolveTaskStatusTransition`, `ReasonRequiredError`), pero eso es una regla de aplicación, no una invariante de la base — hoy nada impide insertar un `block_report` (o un `comment`) sin `body` si algún camino futuro escribe directo a la tabla sin pasar por ese chequeo.
 
+Pendiente: `parseSingleOrgRole` (`domain/task-status.ts`) valida cuántos roles llegan en `tenant.role`, pero no que sean alguno de los cuatro conocidos. Con un valor corrupto como `"admin"` (nunca debería pasar por un flujo propio, pero no hay nada que lo impida a nivel de tipos en tiempo de ejecución) devuelve `'admin' as OrgRole` sin quejarse, y `resolveTaskStatusTransition` termina rechazando con "tu rol no tiene permiso" — un mensaje engañoso para lo que en realidad es un dato corrupto, no una autorización que falta. Agregar la validación contra el conjunto conocido (`'owner' | 'director' | 'manager' | 'operator'`) y tirar el mismo error ruidoso que ya tira para "más de un rol".
+
+Pendiente: `OrgRole` y `parseSingleOrgRole` son conceptos de identidad (quién es, qué rol tiene en la organización), no de `projects` — hoy viven ahí solo porque `projects` fue el primer módulo que los necesitó. El primer slice de otro módulo que también necesite el rol de un member (reservas en fase 3, por ejemplo) va a tener que importarlos cruzando la frontera de `projects`, lo que `dependency-cruiser` (`no-cross-module-internals`) va a rechazar. En ese momento se mueven a `shared/`, no se duplican ni se relaja la regla.
+
 Requisitos transversales de cada slice. Ninguno se da por terminado sin esto:
 
 Acepta client_mutation_id.

@@ -23,6 +23,7 @@ import {
   type TaskRow,
   updateTaskStatus,
 } from '../../infrastructure/task.repository.js';
+import { toTaskOutput } from '../../infrastructure/task-output.mapper.js';
 import type { ChangeTaskStatusCommand } from './change-task-status.command.js';
 
 @Injectable()
@@ -148,25 +149,4 @@ export class ChangeTaskStatusHandler {
 
     return { task: updated, fromStatus: current.status };
   }
-}
-
-function toTaskOutput(task: TaskRow): TaskOutput {
-  return {
-    id: task.id,
-    project_id: task.projectId,
-    parent_task_id: task.parentTaskId,
-    depth: task.depth,
-    title: task.title,
-    description: task.description,
-    status: task.status as TaskOutput['status'],
-    criticality: task.criticality as TaskOutput['criticality'],
-    assignee_member_id: task.assigneeMemberId,
-    planned_start_at: task.plannedStartAt,
-    planned_end_at: task.plannedEndAt,
-    is_milestone: task.isMilestone,
-    ack_required: task.ackRequired,
-    position: task.position,
-    version: task.version,
-    created_at: task.createdAt,
-  };
 }
