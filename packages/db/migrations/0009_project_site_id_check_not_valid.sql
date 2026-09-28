@@ -19,6 +19,42 @@
 --      `PgDialect.migrate` envuelve todas las migraciones pendientes de una
 --      corrida en un único `session.transaction(...)`).
 --
+-- Divergencia intencional entre lo que este archivo aplica y lo que
+-- packages/db/src/schema/projects/schema.ts + meta/0009_snapshot.json
+-- declaran: el esquema de Drizzle ya tiene `siteId: uuid('site_id').notNull()`,
+-- y el snapshot de esta misma migración ya registra la columna como NOT
+-- NULL — pero lo único que esta migración aplica de verdad es el CHECK
+-- NOT VALID de más abajo. La base, después de este despliegue, sigue
+-- teniendo `site_id` nullable a nivel de catálogo (`attnotnull = false`);
+-- lo único que cambia es que ninguna fila NUEVA puede tener site_id null
+-- desde acá (el CHECK ya rige hacia adelante, aunque no esté validado
+-- contra las filas viejas). Es la misma anticipación que ya usa la
+-- convención de CLAUDE.md §6 para ampliar un CHECK (el esquema declara el
+-- estado final desde el primer paso, la base lo alcanza recién en el
+-- último) — acá es la primera vez que se aplica a una columna que pasa a
+-- NOT NULL, no a un CHECK que cambia de valores.
+--
+-- Va en la dirección seguridad, no al revés: si alguien corriera
+-- `pnpm db:generate` entre este despliegue y el de `..._validate.sql`, no
+-- va a ver ninguna diferencia que generar (el esquema y el snapshot ya
+-- coinciden) — por eso `..._validate.sql` no puede generarse con
+-- `drizzle-kit generate` normal, necesita `--custom` (un archivo vacío
+-- para llenar a mano), igual que este archivo. La divergencia nunca deja
+-- pasar un `ALTER` peligroso sin querer: en el peor caso, alguien asume
+-- que la columna ya es NOT NULL cuando en la base real hasta puede tener
+-- nulos (filas viejas, antes del backfill) — un supuesto optimista sobre
+-- datos, no una migración que se salte una validación.
+--
+-- Consecuencia concreta mientras las dos migraciones no estén las dos
+-- desplegadas: el tipo de `ProjectRow['siteId']` en TypeScript (derivado
+-- del esquema de Drizzle) es `string`, no `string | null` — pero una fila
+-- de `project` creada antes de este despliegue, en un ambiente que
+-- todavía no corrió el backfill, puede tener `site_id` null en la base de
+-- verdad. Ningún código de este PR lee `project.site_id` con ese supuesto
+-- (el hook y el script solo escriben), pero cualquier código nuevo que sí
+-- lo lea antes de que `..._validate.sql` esté desplegado tiene que saber
+-- que el tipo miente en esa ventana.
+--
 -- Antes de que el paso 2 llegue a un ambiente con datos reales, hay que
 -- correr el backfill (`apps/api/src/scripts/ensure-default-sites.ts`):
 -- crea el sitio por defecto de toda organización que todavía no tenga

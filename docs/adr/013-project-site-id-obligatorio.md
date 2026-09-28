@@ -61,6 +61,28 @@ TypeScript: dos lugares que pueden divergir en vez de una sola regla.
    que este hook no necesita que `organization_profile` exista para
    insertar el `site` por defecto.
 
+4. **La migración a `NOT NULL` se hace en dos despliegues** (convención
+   NOT VALID + VALIDATE de CLAUDE.md §6, primer caso real de esa
+   convención): `packages/db/migrations/0009_project_site_id_check_not_valid.sql`
+   agrega `CHECK (site_id IS NOT NULL) NOT VALID` (instantáneo, no mira
+   filas existentes); una segunda migración, en un despliegue posterior y
+   después de correr el backfill (`apps/api/src/scripts/ensure-default-sites.ts`)
+   contra el ambiente real, valida ese CHECK y recién ahí hace
+   `ALTER COLUMN site_id SET NOT NULL` de verdad. Esto deja una
+   **divergencia intencional, documentada en el propio `0009`**: el
+   esquema de Drizzle (`packages/db/src/schema/projects/schema.ts`) y el
+   snapshot de esa migración ya declaran `site_id` como `NOT NULL` desde
+   el primer despliegue, aunque la base recién lo sea de verdad después
+   del segundo. Va en la dirección segura — el snapshot "adelantado" nunca
+   hace que `drizzle-kit` genere un `ALTER` peligroso sin querer, en el
+   peor caso hace que alguien asuma sin filas nulas una columna que
+   todavía puede tenerlas — y es la misma anticipación que la convención
+   ya usa para ampliar un `CHECK` existente, aplicada acá por primera vez
+   a una columna que pasa a `NOT NULL`. Consecuencia práctica: la segunda
+   migración no se puede generar con `drizzle-kit generate` normal (no va
+   a detectar ninguna diferencia, esquema y snapshot ya coinciden), hace
+   falta `generate --custom` para el archivo vacío que se llena a mano.
+
 ## Consecuencias
 
 **A favor**
@@ -89,6 +111,14 @@ TypeScript: dos lugares que pueden divergir en vez de una sola regla.
   (alta por script, no por el flujo normal de Better Auth) igual arranca
   con un sitio de más, que hay que borrar o renombrar a mano — no hay forma
   de que el hook sepa de antemano que hacen falta varios.
+- Mientras el segundo despliegue (punto 4) no esté aplicado, el tipo de
+  `siteId` en TypeScript es `string` (no `string | null`) pero una fila de
+  `project` creada antes del primer despliegue, en un ambiente que todavía
+  no corrió el backfill, puede tener `site_id` null en la base de verdad.
+  Ningún código de este PR lee `project.site_id` con ese supuesto (el hook
+  y el script solo escriben), pero cualquier código nuevo que sí lo lea
+  antes de que el segundo despliegue esté aplicado tiene que saber que el
+  tipo miente en esa ventana.
 
 ## Alternativas descartadas
 
