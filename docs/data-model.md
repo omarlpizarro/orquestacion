@@ -159,7 +159,7 @@ El token en claro solo existe en el momento de generarlo y en el enlace que reci
 CREATE TABLE project (
   id               uuid PRIMARY KEY,
   organization_id  text NOT NULL,
-  site_id          uuid,
+  site_id          uuid NOT NULL,
   sop_template_id  uuid,
   code             text NOT NULL,
   name             text NOT NULL,
@@ -178,7 +178,7 @@ CREATE TABLE project (
 
 `archived_at` implementa RF-F1: el proyecto pasa a histórico de solo lectura. La regla no es un trigger sino un guard de aplicación, porque los trabajos de fondo sí necesitan escribir sobre proyectos archivados (por ejemplo, terminar de subir una foto que se sincronizó tarde).
 
-`site_id` sigue nulable (decisión abierta #5 en la última sección). Para resolver la zona horaria con la que se convierte una fecha planeada a UTC (ver ADR-008), el fallback cuando el proyecto no tiene sitio es `organization_profile.timezone` — todo tenant tiene uno, con default `America/Argentina/Buenos_Aires`, así que la conversión siempre resuelve.
+`site_id` es `NOT NULL` (ADR-013): toda organización tiene al menos un sitio por defecto, creado junto con ella (`organizationHooks.afterCreateOrganization` de better-auth), así que ningún proyecto se crea sin sitio. El fallback de zona horaria de ADR-008 (`organization_profile.timezone` cuando no hay sitio) sigue existiendo como defensa ante un `site_id` null que no debería ocurrir con la columna `NOT NULL`, no como caso de negocio esperado.
 
 ### Tareas
 
@@ -998,6 +998,6 @@ Esta lista se mantiene igual en `CLAUDE.md` §13; si las dos alguna vez difieren
 2. **Recursos con capacidad.** Hoy cada unidad física es un recurso. Si aparece un caso real de recurso agrupado (cinco camas, veinte cascos), habría que revisar, porque la exclusion constraint no lo modela.
 3. **Reservas sin conexión.** El esquema las permite como `tentative`. La alternativa es prohibir reservar offline, que es más simple y menos útil.
 4. **Retención del audit log.** La partición mensual necesita un número. Doce meses cubre la mayoría de los casos; salud y minería pueden requerir más por normativa.
-5. **Sitios obligatorios u opcionales.** `project.site_id` sigue nulable — **no** se cerró en fase 2. Lo único que fase 2 definió fue un fallback de zona horaria para cuando es nulo (`organization_profile.timezone`, ver ADR-008 y la nota en la sección de `project`); sigue pendiente si conviene hacerlo `NOT NULL` para simplificar el RBAC por alcance.
+5. ~~**Sitios obligatorios u opcionales.**~~ **Cerrada en fase 2 (ADR-013).** `project.site_id` pasa a `NOT NULL`; al crear una organización se crea un `site` por defecto (`organizationHooks.afterCreateOrganization` de better-auth), así que ningún proyecto queda sin sitio. El fallback de zona horaria de ADR-008 (`organization_profile.timezone` cuando `site_id` es null) queda como defensa, no como caso de negocio esperado. Pendiente de implementación (migración + hook), ver orden de la fase en `docs/phase-2-brief.md`.
 6. **Idempotencia de mutaciones con payload distinto bajo el mismo `client_mutation_id`.** Hoy `mutation_log` no guarda un hash del request, así que un reintento con el mismo `client_mutation_id` pero datos distintos devuelve el resultado anterior en silencio, sin avisar del mismatch. Falta decidir si eso alcanza (es la semántica que ADR-007 ya documenta) o si hace falta guardar un hash del payload y rechazar el reintento si no coincide.
 7. **`task_update.created_by_member_id` para entradas de tipo `system`.** La columna es `NOT NULL` como en cualquier tabla de negocio, pero un `task_update` generado por un proceso automático (por ejemplo, la reprogramación en cascada de fase 5) no tiene un miembro humano detrás. Ninguna funcionalidad de fase 2 escribe ese tipo de fila, así que queda diferido: definir un miembro de sistema reservado, o relajar la columna a nulable para ese caso, cuando se implemente la fase que de verdad lo necesita.

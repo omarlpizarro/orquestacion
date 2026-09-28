@@ -412,10 +412,10 @@ Confirmar antes de implementar lo que dependa de ellas:
 2. Recursos con capacidad mayor a uno (hoy cada unidad física es un recurso).
 3. Si se permiten reservas sin conexión (hoy sí, como `tentative`).
 4. Retención del audit log en meses.
-5. Si `project.site_id` es obligatorio. **Sigue abierta** — fase 2 solo definió
-   un fallback para cuando es nulo (`organization_profile.timezone` para
-   resolver la zona horaria de una tarea, ver ADR-008), no resolvió la
-   pregunta de si debería ser `NOT NULL`.
+5. ~~Si `project.site_id` es obligatorio.~~ **Cerrada en fase 2 (ADR-013):**
+   `project.site_id` pasa a `NOT NULL`; al crear una organización se crea
+   un `site` por defecto. Pendiente de implementación, ver orden de la fase
+   en `docs/phase-2-brief.md`.
 6. Idempotencia de mutaciones con payload distinto bajo el mismo
    `client_mutation_id`: hoy `mutation_log` no guarda un hash del request, así
    que un reintento con el mismo `client_mutation_id` pero datos distintos
