@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { newId, type TaskOutput } from '@orq/contracts';
 import type { Tx } from '@orq/db';
+import { parseSingleOrgRole } from '../../../../shared/auth/org-role.js';
 import { findPriorMutation, recordMutation } from '../../../../shared/database/mutation-log.js';
 import {
   hasPostgresErrorCode,
@@ -10,11 +11,14 @@ import { TransactionService } from '../../../../shared/database/transaction.serv
 import { domainEvents } from '../../../../shared/domain-events/domain-events.js';
 import type { TenantIdentity } from '../../../../shared/request-context/request-context.js';
 import { getRequestContext } from '../../../../shared/request-context/request-context.js';
-import { CollaborationService } from '../../../collaboration/collaboration.module.js';
+import {
+  CollaborationService,
+  type TaskUpdateKind,
+} from '../../../collaboration/collaboration.module.js';
 import { TaskNotFoundError } from '../../domain/errors/task-not-found.error.js';
 import { TaskVersionMismatchError } from '../../domain/errors/task-version-mismatch.error.js';
 import {
-  parseSingleOrgRole,
+  type ReasonKind,
   resolveTaskStatusTransition,
   type TaskStatus,
 } from '../../domain/task-status-transitions.js';
@@ -23,7 +27,21 @@ import {
   type TaskRow,
   updateTaskStatus,
 } from '../../infrastructure/task.repository.js';
+import { toTaskOutput } from '../../infrastructure/task-output.mapper.js';
 import type { ChangeTaskStatusCommand } from './change-task-status.command.js';
+
+/**
+ * `ReasonKind` (dominio de `projects`) y `TaskUpdateKind` (`collaboration`)
+ * son dos tipos distintos que hoy comparten los mismos nombres de valor.
+ * Un `Record` explícito, en vez de `transition.requiresReason ?? 'status_change'`
+ * pasado directo como `kind`, hace que agregar un `ReasonKind` nuevo sin
+ * agregarlo acá (o sin que ese valor exista también en `TaskUpdateKind`)
+ * falle al compilar — no en runtime contra `task_update_kind_check`.
+ */
+const REASON_KIND_TO_TASK_UPDATE_KIND: Record<ReasonKind, TaskUpdateKind> = {
+  block_report: 'block_report',
+  reopen: 'reopen',
+};
 
 @Injectable()
 export class ChangeTaskStatusHandler {
@@ -132,8 +150,10 @@ export class ChangeTaskStatusHandler {
       organizationId: tenant.organizationId,
       createdByMemberId: tenant.memberId,
       taskId: command.id,
-      kind: transition.requiresReason ?? 'status_change',
-      body: transition.requiresReason ? (command.reason as string) : null,
+      kind: transition.requiresReason
+        ? REASON_KIND_TO_TASK_UPDATE_KIND[transition.requiresReason]
+        : 'status_change',
+      body: transition.reason,
       metadata: { from: current.status, to: command.to_status },
     });
 
@@ -148,25 +168,4 @@ export class ChangeTaskStatusHandler {
 
     return { task: updated, fromStatus: current.status };
   }
-}
-
-function toTaskOutput(task: TaskRow): TaskOutput {
-  return {
-    id: task.id,
-    project_id: task.projectId,
-    parent_task_id: task.parentTaskId,
-    depth: task.depth,
-    title: task.title,
-    description: task.description,
-    status: task.status as TaskOutput['status'],
-    criticality: task.criticality as TaskOutput['criticality'],
-    assignee_member_id: task.assigneeMemberId,
-    planned_start_at: task.plannedStartAt,
-    planned_end_at: task.plannedEndAt,
-    is_milestone: task.isMilestone,
-    ack_required: task.ackRequired,
-    position: task.position,
-    version: task.version,
-    created_at: task.createdAt,
-  };
 }

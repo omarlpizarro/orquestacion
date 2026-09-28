@@ -159,7 +159,7 @@ El token en claro solo existe en el momento de generarlo y en el enlace que reci
 CREATE TABLE project (
   id               uuid PRIMARY KEY,
   organization_id  text NOT NULL,
-  site_id          uuid,
+  site_id          uuid NOT NULL,
   sop_template_id  uuid,
   code             text NOT NULL,
   name             text NOT NULL,
@@ -178,7 +178,7 @@ CREATE TABLE project (
 
 `archived_at` implementa RF-F1: el proyecto pasa a histórico de solo lectura. La regla no es un trigger sino un guard de aplicación, porque los trabajos de fondo sí necesitan escribir sobre proyectos archivados (por ejemplo, terminar de subir una foto que se sincronizó tarde).
 
-`site_id` sigue nulable (decisión abierta #5 en la última sección). Para resolver la zona horaria con la que se convierte una fecha planeada a UTC (ver ADR-008), el fallback cuando el proyecto no tiene sitio es `organization_profile.timezone` — todo tenant tiene uno, con default `America/Argentina/Buenos_Aires`, así que la conversión siempre resuelve.
+`site_id` es `NOT NULL` (ADR-013): toda organización tiene al menos un sitio por defecto, creado junto con ella (`organizationHooks.afterCreateOrganization` de better-auth), así que ningún proyecto se crea sin sitio. El fallback de zona horaria de ADR-008 (`organization_profile.timezone` cuando no hay sitio) sigue existiendo como defensa ante un `site_id` null que no debería ocurrir con la columna `NOT NULL`, no como caso de negocio esperado.
 
 ### Tareas
 
@@ -836,6 +836,7 @@ Regla general: todo índice de una tabla de negocio arranca con `organization_id
 | --- | --- | --- |
 | `task` | `(organization_id, assignee_member_id, status, planned_end_at)` parcial `WHERE deleted_at IS NULL` | Vista "Mi Día" (RF-C3), la consulta más frecuente del sistema |
 | `task` | `(organization_id, project_id, position)` | Kanban y listado de proyecto |
+| `task` | `(organization_id, project_id, parent_task_id)` | `findLastSiblingPosition` (create-task, PR 1) |
 | `task` | `(organization_id, planned_end_at) WHERE status NOT IN ('done','cancelled')` | Barrido de vencimientos del worker |
 | `task` | `gist (path)` | Subárboles de subtareas |
 | `task` | `gin (custom_fields jsonb_path_ops)` | Filtros por campo personalizado |
@@ -971,19 +972,25 @@ slices siguientes contra una conexión que en los hechos ignora las policies.
 | `0004` | `mutation_log` | `mutation_log`, adelantada desde `0012` (ADR-007: la idempotencia se adelanta a fase 2, igual que roles/RLS se adelantó a fase 1) | Hecha |
 | `0005` | `projects` | `project`, `task`, triggers de `path` y `version` (`app_bump_version()`/`app_apply_version_triggers()`, `task_maintain_path()`) | Hecha |
 | `0006` | `collaboration` | `task_update`, adelantada desde `0010` — solo esta tabla, para que `projects` (máquina de estados, ADR-012) tenga dónde escribir el motivo de un bloqueo o una reapertura. `attachment`/`task_acknowledgement` quedan en `0011` | Hecha |
-| `0007` | `templates` | `sop_template`, `sop_template_task` | Pendiente |
-| `0008` | `custom_fields` | `custom_field_definition`, índices GIN | Pendiente |
-| `0009` | `resources` | `resource`, `resource_booking` con la exclusion constraint | Pendiente |
-| `0010` | `dependencies` | `task_dependency`, función anti-ciclos, `schedule_change` | Pendiente |
-| `0011` | `collaboration` (resto) | `attachment`, `task_acknowledgement` | Pendiente |
-| `0012` | `audit` | `audit_log` particionada, `audit_trigger()`, `REVOKE` | Pendiente |
-| `0013` | `notifications` | `notification`, `notification_preference`, `escalation_policy` | Pendiente |
-| `0014` | `sync` | Publicación lógica, `wal_level` (ya no `mutation_log`, adelantada a `0004`) | Pendiente |
-| `0015` | `billing` | `plan`, `subscription`, `payment_event`, `usage_counter` | Pendiente |
-| `0015` | `analytics` | `project_kpi` materializada y su job de refresco | Pendiente |
-| `0016` | `seed` | Planes, plantillas SOP por industria, catálogos iniciales | Pendiente |
+| `0007` | `task_update_reopen_kind` | Amplía `task_update_kind_check` para admitir `'reopen'` (ADR-012: reabrir una tarea `done` exige motivo, igual que bloquear) | Hecha |
+| `0008` | `task_my_day_indexes` | `(organization_id, assignee_member_id, status, planned_end_at)` parcial `WHERE deleted_at IS NULL` (vista "Mi Día") y `(organization_id, project_id, parent_task_id)` (`findLastSiblingPosition`, faltaba desde `0005`) | Hecha |
+| `0009` | `project_site_id_check_not_valid` | `ALTER TABLE project ADD CONSTRAINT ... CHECK (site_id IS NOT NULL) NOT VALID` (ADR-013, primer caso real de la convención NOT VALID + VALIDATE de CLAUDE.md §6) | Hecha |
+| `0010` | `project_site_id_not_null_validate` | `VALIDATE CONSTRAINT` + `ALTER COLUMN site_id SET NOT NULL` + `DROP` el CHECK temporal de `0009`, en despliegue separado (ADR-013) | Hecha |
+| `0011` | `templates` | `sop_template`, `sop_template_task` | Pendiente |
+| `0012` | `custom_fields` | `custom_field_definition`, índices GIN | Pendiente |
+| `0013` | `resources` | `resource`, `resource_booking` con la exclusion constraint | Pendiente |
+| `0014` | `dependencies` | `task_dependency`, función anti-ciclos, `schedule_change` | Pendiente |
+| `0015` | `collaboration` (resto) | `attachment`, `task_acknowledgement` | Pendiente |
+| `0016` | `audit` | `audit_log` particionada, `audit_trigger()`, `REVOKE` | Pendiente |
+| `0017` | `notifications` | `notification`, `notification_preference`, `escalation_policy` | Pendiente |
+| `0018` | `sync` | Publicación lógica, `wal_level` (ya no `mutation_log`, adelantada a `0004`) | Pendiente |
+| `0019` | `billing` | `plan`, `subscription`, `payment_event`, `usage_counter` | Pendiente |
+| `0020` | `analytics` | `project_kpi` materializada y su job de refresco | Pendiente |
+| `0021` | `seed` | Planes, plantillas SOP por industria, catálogos iniciales | Pendiente |
 
-`0000` a `0011` son la v1. `0012` a `0016` acompañan las fases posteriores, pero conviene escribirlas al mismo tiempo para que el esquema quede coherente de entrada.
+`0009`/`0010` (site_id obligatorio, ADR-013) no estaban en el plan original — se adelantan por la misma razón que `mutation_log` y `task_update`: el alcance por sitio, que sigue en fase 2, necesita la columna cerrada primero. Corrieron ellas dos en el lugar de `templates`/`custom_fields`, que se corren un lugar cada una.
+
+`0000` a `0015` son la v1. `0016` a `0021` acompañan las fases posteriores, pero conviene escribirlas al mismo tiempo para que el esquema quede coherente de entrada.
 
 Regla de operación: ninguna migración hace `DROP COLUMN` en el mismo despliegue que deja de usarla. Primero se deja de escribir, se despliega, se verifica, y recién en un despliegue posterior se borra. Con clientes en el campo que corren versiones viejas de la app móvil, esa disciplina es lo que evita cortes.
 
@@ -995,6 +1002,6 @@ Esta lista se mantiene igual en `CLAUDE.md` §13; si las dos alguna vez difieren
 2. **Recursos con capacidad.** Hoy cada unidad física es un recurso. Si aparece un caso real de recurso agrupado (cinco camas, veinte cascos), habría que revisar, porque la exclusion constraint no lo modela.
 3. **Reservas sin conexión.** El esquema las permite como `tentative`. La alternativa es prohibir reservar offline, que es más simple y menos útil.
 4. **Retención del audit log.** La partición mensual necesita un número. Doce meses cubre la mayoría de los casos; salud y minería pueden requerir más por normativa.
-5. **Sitios obligatorios u opcionales.** `project.site_id` sigue nulable — **no** se cerró en fase 2. Lo único que fase 2 definió fue un fallback de zona horaria para cuando es nulo (`organization_profile.timezone`, ver ADR-008 y la nota en la sección de `project`); sigue pendiente si conviene hacerlo `NOT NULL` para simplificar el RBAC por alcance.
+5. ~~**Sitios obligatorios u opcionales.**~~ **Cerrada e implementada en fase 2 (ADR-013), migraciones `0009`/`0010`.** `project.site_id` es `NOT NULL`; al crear una organización se crea un `site` por defecto (`organizationHooks.afterCreateOrganization` de better-auth). El fallback de zona horaria de ADR-008 (`organization_profile.timezone` cuando `site_id` es null) queda como defensa, no como caso de negocio esperado.
 6. **Idempotencia de mutaciones con payload distinto bajo el mismo `client_mutation_id`.** Hoy `mutation_log` no guarda un hash del request, así que un reintento con el mismo `client_mutation_id` pero datos distintos devuelve el resultado anterior en silencio, sin avisar del mismatch. Falta decidir si eso alcanza (es la semántica que ADR-007 ya documenta) o si hace falta guardar un hash del payload y rechazar el reintento si no coincide.
 7. **`task_update.created_by_member_id` para entradas de tipo `system`.** La columna es `NOT NULL` como en cualquier tabla de negocio, pero un `task_update` generado por un proceso automático (por ejemplo, la reprogramación en cascada de fase 5) no tiene un miembro humano detrás. Ninguna funcionalidad de fase 2 escribe ese tipo de fila, así que queda diferido: definir un miembro de sistema reservado, o relajar la columna a nulable para ese caso, cuando se implemente la fase que de verdad lo necesita.

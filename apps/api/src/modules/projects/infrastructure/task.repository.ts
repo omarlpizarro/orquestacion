@@ -1,3 +1,4 @@
+import type { MyDaySection } from '@orq/contracts';
 import type { Tx } from '@orq/db';
 import { sql } from 'drizzle-orm';
 
@@ -64,10 +65,17 @@ interface TaskRowSql extends Record<string, unknown> {
  * nunca un `Date` — confirmado además a mano contra el harness
  * (`typeof row.created_at === 'string'`). `new Date(...)` lo entiende
  * igual, así que solo hace falta normalizar antes de que
- * `taskOutputSchema` (que exige ISO estricto) lo valide.
+ * `taskOutputSchema` (que exige ISO estricto) lo valide. Todo el resto del
+ * código (comparaciones de fecha incluidas) trabaja sobre este único
+ * formato — las comparaciones de fecha en sí las hace Postgres, comparando
+ * `timestamptz` como lo que son, nunca como texto.
  */
+function toIso(value: string): string {
+  return new Date(value).toISOString();
+}
+
 function toIsoOrNull(value: string | null): string | null {
-  return value === null ? null : new Date(value).toISOString();
+  return value === null ? null : toIso(value);
 }
 
 function mapTaskRow(row: TaskRowSql): TaskRow {
@@ -88,7 +96,7 @@ function mapTaskRow(row: TaskRowSql): TaskRow {
     ackRequired: row.ack_required,
     position: row.position,
     version: row.version,
-    createdAt: toIsoOrNull(row.created_at) ?? row.created_at,
+    createdAt: toIso(row.created_at),
   };
 }
 
@@ -184,6 +192,116 @@ export async function findTaskById(
   );
   const row = result.rows[0];
   return row ? mapTaskRow(row) : null;
+}
+
+export interface FindMyDayTaskRowsParams {
+  organizationId: string;
+  assigneeMemberId: string;
+  todayStartUtc: string;
+  todayEndUtc: string;
+}
+
+export interface MyDayTaskRow extends TaskRow {
+  section: MyDaySection;
+  isOverdue: boolean;
+}
+
+interface MyDayTaskRowSql extends TaskRowSql {
+  section: MyDaySection;
+  is_overdue: boolean;
+}
+
+function mapMyDayTaskRow(row: MyDayTaskRowSql): MyDayTaskRow {
+  return { ...mapTaskRow(row), section: row.section, isOverdue: row.is_overdue };
+}
+
+/**
+ * Qué tarea entra a "Mi Día" y en qué sección vive es una regla que se
+ * escribe acá, en un solo lugar — antes vivía duplicada entre este `WHERE`
+ * y `classifyMyDayTask` (dominio, en TypeScript), y las dos copias
+ * terminaban desincronizándose (docs/phase-2-brief.md, "Mi Día"). No es
+ * una invariante de escritura como la máquina de estados de `task.status`
+ * (que sí vive en `domain/`, con tests exhaustivos, porque protege qué se
+ * persiste): es una proyección de lectura, así que vive en la consulta que
+ * la produce.
+ *
+ * La subconsulta filtra por organización, assignee, `deleted_at` y estado
+ * (exactamente las columnas de `task_org_assignee_status_planned_end_idx`,
+ * más `deleted_at` porque el índice es parcial `WHERE deleted_at IS NULL`)
+ * y calcula `section` con un `CASE` — `null` para lo que no entra a
+ * ninguna sección — e `is_overdue` como expresión aparte, independiente de
+ * `section` (una tarea puede ser `blocked` y estar vencida a la vez). Toda
+ * `in_progress` no vencida cae en `today` sin mirar sus fechas (si un
+ * operario ya está haciendo algo, no puede desaparecer de Mi Día porque
+ * estaba agendado para mañana — docs/phase-2-brief.md, "Mi Día"). La
+ * consulta externa descarta lo que no clasificó (`section is not null`) y
+ * ordena: primero por sección (vencidas, hoy, bloqueadas, sin fecha),
+ * después por el criterio de cada una. El `CASE ... end` sin `else`
+ * (evalúa `null` fuera de la sección que le corresponde) es el truco
+ * estándar para que una clave de orden solo aplique dentro de su propio
+ * grupo — un valor compartido no discrimina entre filas de otro grupo, y
+ * el orden entre grupos ya lo definió la primera clave. `id` al final
+ * como desempate determinístico: a diferencia de un `Array.prototype.sort`
+ * en JS, Postgres no garantiza ningún orden estable entre filas empatadas.
+ *
+ * Exportada (no solo usada internamente) para que el test de rendimiento
+ * (`test/my-day-performance.integration.spec.ts`) le anteponga `EXPLAIN` a
+ * esta misma consulta, exacta — nunca a una copia que podría
+ * desincronizarse de la real.
+ */
+export function buildMyDayTaskQuery(params: FindMyDayTaskRowsParams) {
+  return sql`
+    select * from (
+      select *, nlevel(path) as depth,
+        case
+          when status = 'blocked' then 'blocked'
+          when planned_end_at is not null and planned_end_at < now() then 'overdue'
+          when status = 'in_progress' then 'today'
+          when coalesce(planned_start_at, planned_end_at) < ${params.todayEndUtc}
+            and coalesce(planned_end_at, planned_start_at) >= ${params.todayStartUtc}
+            then 'today'
+          when status = 'pending' and planned_start_at is null and planned_end_at is null
+            then 'undated'
+        end as section,
+        (planned_end_at is not null and planned_end_at < now()) as is_overdue
+      from task
+      where organization_id = ${params.organizationId}
+        and assignee_member_id = ${params.assigneeMemberId}
+        and deleted_at is null
+        and status not in ('done', 'cancelled')
+    ) classified
+    where section is not null
+    order by
+      case section
+        when 'overdue' then 0
+        when 'today' then 1
+        when 'blocked' then 2
+        when 'undated' then 3
+      end,
+      -- Criticidad: aplica a vencidas, bloqueadas y sin fecha; en "hoy" el
+      -- orden es por coalesce(planned_start_at, planned_end_at), así que
+      -- acá da null para esas filas y no participa del desempate.
+      case when section <> 'today' then
+        case criticality
+          when 'critical' then 0
+          when 'high' then 1
+          when 'normal' then 2
+          else 3
+        end
+      end,
+      case section when 'today' then coalesce(planned_start_at, planned_end_at) end,
+      case when section in ('overdue', 'blocked') then planned_end_at end,
+      case section when 'undated' then created_at end,
+      id
+  `;
+}
+
+export async function findMyDayTaskRows(
+  tx: Tx,
+  params: FindMyDayTaskRowsParams,
+): Promise<MyDayTaskRow[]> {
+  const result = await tx.execute<MyDayTaskRowSql>(buildMyDayTaskQuery(params));
+  return result.rows.map(mapMyDayTaskRow);
 }
 
 export interface UpdateTaskStatusParams {

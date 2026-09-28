@@ -1,5 +1,6 @@
+import type { OrgRole } from '../../../../shared/auth/org-role.js';
 import { DomainError } from '../../../../shared/errors/domain-error.js';
-import type { OrgRole, TaskStatus } from '../task-status.js';
+import type { TaskStatus } from '../task-status.js';
 
 export class TaskStatusTransitionForbiddenError extends DomainError {
   readonly code = 'FORBIDDEN';

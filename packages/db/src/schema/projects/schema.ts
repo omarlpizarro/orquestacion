@@ -19,7 +19,7 @@ export const project = pgTable(
   'project',
   {
     ...standardColumns(),
-    siteId: uuid('site_id'),
+    siteId: uuid('site_id').notNull(),
     sopTemplateId: uuid('sop_template_id'),
     code: text('code').notNull(),
     name: text('name').notNull(),
@@ -37,10 +37,13 @@ export const project = pgTable(
       columns: [table.organizationId],
       foreignColumns: [organization.id],
     }),
-    // Compuesta hacia `site`, aparte de la directa a `organization`: cuando
-    // `site_id` es null, Postgres no evalúa una FK compuesta (MATCH SIMPLE),
-    // así que sin la de arriba un proyecto sin sitio quedaría con
-    // `organization_id` sin validar contra nada.
+    // Compuesta hacia `site`: valida que `site_id` pertenezca a la misma
+    // organización que `project.organization_id`, no solo que exista. Desde
+    // ADR-013 `site_id` es `NOT NULL`, así que esta FK compuesta ya alcanza
+    // para validar `organization_id` transitivamente (mismo patrón que
+    // `task`, que tampoco tiene FK directa a `organization`) — la FK directa
+    // de arriba quedó redundante, no se saca en esta migración para no medir
+    // ese cambio junto con el de `site_id`, ver docs/adr/013-project-site-id-obligatorio.md.
     foreignKey({
       columns: [table.organizationId, table.siteId],
       foreignColumns: [site.organizationId, site.id],
@@ -94,6 +97,21 @@ export const task = pgTable(
       table.organizationId,
       table.projectId,
       table.position,
+    ),
+    // Vista "Mi Día" (docs/data-model.md, "Índices, rendimiento y
+    // crecimiento"): parcial porque una tarea borrada nunca entra a esa
+    // consulta, y así el índice no carga con filas que jamás se leen por
+    // este camino.
+    index('task_org_assignee_status_planned_end_idx')
+      .on(table.organizationId, table.assigneeMemberId, table.status, table.plannedEndAt)
+      .where(sql`${table.deletedAt} is null`),
+    // findLastSiblingPosition (create-task, PR 1): faltaba desde ese PR, se
+    // agrega acá para no generar una migración que solo agrega un índice
+    // (docs/phase-2-brief.md).
+    index('task_org_project_parent_idx').on(
+      table.organizationId,
+      table.projectId,
+      table.parentTaskId,
     ),
     check(
       'task_status_check',

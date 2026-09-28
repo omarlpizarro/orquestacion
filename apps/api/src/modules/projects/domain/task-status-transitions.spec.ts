@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { OrgRole } from '../../../shared/auth/org-role.js';
 import { InvalidTaskStatusTransitionError } from './errors/invalid-task-status-transition.error.js';
 import { ReasonRequiredError } from './errors/reason-required.error.js';
 import { TaskStatusTransitionForbiddenError } from './errors/task-status-transition-forbidden.error.js';
@@ -7,7 +8,6 @@ import {
   findTaskStatusTransition,
   isExcludedFromComplianceKpis,
   isTerminalTaskStatus,
-  type OrgRole,
   type ReasonKind,
   resolveTaskStatusTransition,
   type TaskStatus,
@@ -236,6 +236,28 @@ describe('regla fija: pasar a blocked exige motivo', () => {
       reason: 'Falta el permiso municipal',
     });
     expect(transition.requiresReason).toBe('block_report');
+  });
+
+  it('devuelve el motivo recortado de espacios al borde, no el que mandó el caller tal cual', () => {
+    const transition = resolveTaskStatusTransition({
+      from: 'in_progress',
+      to: 'blocked',
+      role: 'operator',
+      isAssignee: true,
+      reason: '  Falta el permiso municipal  ',
+    });
+    expect(transition.reason).toBe('Falta el permiso municipal');
+  });
+
+  it('reason es null cuando la transición no exige motivo, aunque el caller mande uno', () => {
+    const transition = resolveTaskStatusTransition({
+      from: 'pending',
+      to: 'in_progress',
+      role: 'operator',
+      isAssignee: true,
+      reason: 'Un motivo que esta transición no pidió',
+    });
+    expect(transition.reason).toBeNull();
   });
 
   it('pending -> blocked (no se pudo ni empezar) también exige motivo', () => {

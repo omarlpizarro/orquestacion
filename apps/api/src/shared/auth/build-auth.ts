@@ -4,6 +4,7 @@ import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { organization } from 'better-auth/plugins';
 import { accessControl, organizationRoles } from './access-control.js';
+import { handleOrganizationCreated } from './organization-hooks.js';
 
 /**
  * Factory pura, sin efectos de lado: `AuthModule` la llama con el `Db` y el
@@ -44,6 +45,14 @@ export function buildAuth(env: ServerEnv, db: Db) {
         ac: accessControl,
         roles: organizationRoles,
         creatorRole: 'owner',
+        // ADR-013: toda organización queda con un sitio por defecto. No
+        // puede evitar que la organización se cree si falla — ver el
+        // comentario de `handleOrganizationCreated`.
+        organizationHooks: {
+          afterCreateOrganization: async (data) => {
+            await handleOrganizationCreated(db, data);
+          },
+        },
       }),
     ],
   });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseSingleOrgRole } from './task-status.js';
+import { parseSingleOrgRole } from './org-role.js';
 
 describe('parseSingleOrgRole', () => {
   it('devuelve el rol tal cual cuando hay uno solo', () => {
@@ -23,5 +23,14 @@ describe('parseSingleOrgRole', () => {
 
   it('el mensaje de error menciona por qué (para quien lo vea en un log)', () => {
     expect(() => parseSingleOrgRole('owner,operator')).toThrow(/hasCapability/);
+  });
+
+  it('lanza si el único rol no es ninguno de los cuatro conocidos', () => {
+    expect(() => parseSingleOrgRole('admin')).toThrow();
+    expect(() => parseSingleOrgRole('')).toThrow();
+  });
+
+  it('el mensaje de un rol corrupto no dice "tu rol no tiene permiso": es un dato inválido, no una autorización que falta', () => {
+    expect(() => parseSingleOrgRole('admin')).toThrow(/rol conocido/);
   });
 });
