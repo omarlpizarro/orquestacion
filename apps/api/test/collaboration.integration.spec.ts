@@ -12,6 +12,7 @@ import type { Auth } from '../src/shared/auth/build-auth.js';
 import { mountBetterAuth } from '../src/shared/auth/mount-better-auth.js';
 import { DB } from '../src/shared/database/database.tokens.js';
 import { resolveTenantIdentity } from '../src/shared/request-context/request-context.middleware.js';
+import { getDefaultSiteId } from './helpers/get-default-site-id.js';
 import { signUpAndCreateOrg } from './helpers/sign-up-and-create-org.js';
 
 /**
@@ -56,6 +57,7 @@ describe('CollaborationService.createTaskUpdate (integración)', () => {
     if (!tenant) throw new Error('esperaba tenant resuelto tras crear la organización');
     memberId = tenant.memberId;
 
+    const siteId = await getDefaultSiteId(db, { organizationId, memberId });
     const projectId = newId();
     taskId = newId();
     await withTenantTransaction(
@@ -63,8 +65,8 @@ describe('CollaborationService.createTaskUpdate (integración)', () => {
       { organizationId, memberId, requestId: newId() },
       async (tx) => {
         await tx.execute(sql`
-        insert into project (id, organization_id, created_by_member_id, code, name)
-        values (${projectId}, ${organizationId}, ${memberId}, 'PRY-1', 'Frente Este')
+        insert into project (id, organization_id, site_id, created_by_member_id, code, name)
+        values (${projectId}, ${organizationId}, ${siteId}, ${memberId}, 'PRY-1', 'Frente Este')
       `);
         await tx.execute(sql`
         insert into task (id, organization_id, created_by_member_id, project_id, title, position)

@@ -1,0 +1,28 @@
+-- ADR-013 (docs/adr/013-project-site-id-obligatorio.md): `project.site_id`
+-- pasa a NOT NULL. Primer caso real de la convención NOT VALID + VALIDATE
+-- de CLAUDE.md §6: un `ALTER COLUMN ... SET NOT NULL` directo revisa la
+-- tabla entera bajo un lock exclusivo de una sola pasada. Acá se separa en
+-- dos despliegues:
+--   1. Este archivo: agrega un CHECK equivalente con NOT VALID (instantáneo,
+--      no mira filas existentes) — a partir de acá toda fila NUEVA ya exige
+--      site_id, sin haber tocado ninguna fila vieja todavía.
+--   2. 0010_project_site_id_not_null_validate.sql, EN OTRO DESPLIEGUE:
+--      valida el CHECK, recién ahí convierte la columna a NOT NULL de
+--      verdad (Postgres se salta el escaneo completo porque ya hay un CHECK
+--      validado que prueba lo mismo) y borra el CHECK, ya redundante.
+--
+-- Antes de que este archivo llegue a un ambiente con datos reales, hay que
+-- correr `packages/db/scripts/ensure-default-sites.ts` (documentado ahí):
+-- crea el sitio por defecto de toda organización que todavía no tenga
+-- ninguno, y completa `site_id` en los proyectos que lo tengan null. Sin
+-- ese backfill, el VALIDATE del paso 2 falla apenas encuentra la primera
+-- fila vieja con `site_id` null — falla segura (el despliegue se aborta),
+-- no corrompe nada, pero hay que correr el backfill antes para que no
+-- pase.
+--
+-- SET LOCAL, no SET a secas: un SET a secas sobrevive al COMMIT de esta
+-- migración y queda pegado a la conexión del pool de `app_owner`, afectando
+-- migraciones siguientes de otras tablas que no lo necesitan. SET LOCAL
+-- rige solo hasta el fin de esta transacción/corrida.
+SET LOCAL lock_timeout = '5s';
+ALTER TABLE "project" ADD CONSTRAINT "project_site_id_not_null" CHECK ("site_id" IS NOT NULL) NOT VALID;

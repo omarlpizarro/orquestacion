@@ -13,6 +13,7 @@ import type { Auth } from '../src/shared/auth/build-auth.js';
 import { mountBetterAuth } from '../src/shared/auth/mount-better-auth.js';
 import { DB } from '../src/shared/database/database.tokens.js';
 import { resolveTenantIdentity } from '../src/shared/request-context/request-context.middleware.js';
+import { getDefaultSiteId } from './helpers/get-default-site-id.js';
 import { signUpAndCreateOrg } from './helpers/sign-up-and-create-org.js';
 
 const ORG_COUNT = 50;
@@ -105,11 +106,15 @@ describe('Mi Día — seed de volumen y EXPLAIN (integración)', () => {
         `),
       );
 
+      const siteId = await getDefaultSiteId(db, {
+        organizationId: org.organizationId,
+        memberId: tenant.memberId,
+      });
       const projectId = newId();
       await withTenantTransaction(db, tenantContext, (tx) =>
         tx.execute(sql`
-          insert into project (id, organization_id, created_by_member_id, code, name)
-          values (${projectId}, ${org.organizationId}, ${tenant.memberId}, 'PRY-1', 'Proyecto de volumen')
+          insert into project (id, organization_id, site_id, created_by_member_id, code, name)
+          values (${projectId}, ${org.organizationId}, ${siteId}, ${tenant.memberId}, 'PRY-1', 'Proyecto de volumen')
         `),
       );
 

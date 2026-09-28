@@ -19,7 +19,7 @@ export const project = pgTable(
   'project',
   {
     ...standardColumns(),
-    siteId: uuid('site_id'),
+    siteId: uuid('site_id').notNull(),
     sopTemplateId: uuid('sop_template_id'),
     code: text('code').notNull(),
     name: text('name').notNull(),
@@ -37,10 +37,13 @@ export const project = pgTable(
       columns: [table.organizationId],
       foreignColumns: [organization.id],
     }),
-    // Compuesta hacia `site`, aparte de la directa a `organization`: cuando
-    // `site_id` es null, Postgres no evalúa una FK compuesta (MATCH SIMPLE),
-    // así que sin la de arriba un proyecto sin sitio quedaría con
-    // `organization_id` sin validar contra nada.
+    // Compuesta hacia `site`: valida que `site_id` pertenezca a la misma
+    // organización que `project.organization_id`, no solo que exista. Desde
+    // ADR-013 `site_id` es `NOT NULL`, así que esta FK compuesta ya alcanza
+    // para validar `organization_id` transitivamente (mismo patrón que
+    // `task`, que tampoco tiene FK directa a `organization`) — la FK directa
+    // de arriba quedó redundante, no se saca en esta migración para no medir
+    // ese cambio junto con el de `site_id`, ver docs/adr/013-project-site-id-obligatorio.md.
     foreignKey({
       columns: [table.organizationId, table.siteId],
       foreignColumns: [site.organizationId, site.id],
