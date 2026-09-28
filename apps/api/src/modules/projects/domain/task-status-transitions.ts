@@ -5,7 +5,6 @@ import { TaskStatusTransitionForbiddenError } from './errors/task-status-transit
 import { TaskStatusTransitionRequiresAssigneeError } from './errors/task-status-transition-requires-assignee.error.js';
 import type { ReasonKind, TaskStatus } from './task-status.js';
 
-export type { OrgRole } from '../../../shared/auth/org-role.js';
 export type { ReasonKind, TaskStatus } from './task-status.js';
 
 // Mismo conjunto que `ORG_ROLES` (`shared/auth/org-role.ts`): todos los
