@@ -9,7 +9,8 @@
     "start": "node dist/main.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --config vitest.config.ts",
-    "test:integration": "vitest run --config vitest.integration.config.ts"
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "db:ensure-default-sites": "node dist/src/scripts/ensure-default-sites.js"
   },
   "dependencies": {
     "@nestjs/common": "12.0.3",

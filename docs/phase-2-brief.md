@@ -78,6 +78,8 @@ Orden del resto de la fase (revisado 2026-09-28, reemplaza cualquier orden impl�
 9. **Notificaciones básicas.**
 10. **Dashboard web mínimo.**
 
+Pendiente, sin implementar (ADR-013): si `afterCreateOrganization` falla después de que Better Auth ya confirmó la organización y el member (el hook no puede evitar eso, ver el ADR), la organización queda sin sitio — y quien la creó no puede simplemente reintentar `/organization/create`, porque el `slug` que eligió ya existe. Hoy la única reparación es correr `ensure-default-sites` a mano. Como `ensureDefaultSite` ya es idempotente, evaluar que el primer endpoint que de verdad necesite un sitio (crear un proyecto, por ejemplo) la autorrepare de paso si la encuentra en ese estado, en vez de dejarlo silenciosamente roto hasta la próxima corrida del backfill.
+
 Cómo trabajar. Un slice por PR; si un PR toca domain/ más cuatro features, dividilo. Ante cualquier ambigüedad, pará y planteámela con las opciones y su evidencia, como hiciste con el singular/plural y con las peer dependencies. Si una decisión de la tabla de stack está bloqueada por un hecho verificable, decilo: eso no es redebatir, es lo que quiero que hagas.
 
 Empezá por el PR 1 y avisame cuando esté para revisar.

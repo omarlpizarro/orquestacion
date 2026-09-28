@@ -1,6 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import type { Tx } from '@orq/db';
 import { sql } from 'drizzle-orm';
+import {
+  type EnsureDefaultSiteParams,
+  ensureDefaultSite,
+} from '../../shared/auth/ensure-default-site.js';
 
 export interface ResolveTimezoneParams {
   organizationId: string;
@@ -40,5 +44,16 @@ export class TenancyService {
       );
     }
     return result.rows[0].timezone;
+  }
+
+  /**
+   * Envoltorio delgado sobre `shared/auth/ensure-default-site.ts` (ADR-013)
+   * para quien lo necesite vía DI de Nest — mismo patrón que
+   * `resolveTimezone`. La lógica real vive en `shared/` porque el llamador
+   * principal (el hook `afterCreateOrganization` de Better Auth) no puede
+   * importar `modules/*`.
+   */
+  ensureDefaultSite(tx: Tx, params: EnsureDefaultSiteParams): Promise<void> {
+    return ensureDefaultSite(tx, params);
   }
 }
