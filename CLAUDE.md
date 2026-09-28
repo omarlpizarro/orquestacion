@@ -257,6 +257,64 @@ Detalle completo en `docs/data-model.md`. Lo mínimo que tenés que respetar sie
   `NOT VALID`. Si `CREATE INDEX CONCURRENTLY` se interrumpe a mitad de
   camino, Postgres puede dejar un índice `INVALID`: hay que `DROP INDEX` ese
   índice y reintentar el paso 1, nunca dejarlo así.
+- **Un `CHECK` o una `FOREIGN KEY` nueva sobre una tabla que ya tiene datos
+  va con `ADD CONSTRAINT ... NOT VALID`, y el `VALIDATE CONSTRAINT` que la
+  valida va en un despliegue posterior, nunca en la misma migración ni en
+  el mismo *run* del migrador.** `DROP CONSTRAINT` + `ADD CONSTRAINT` (lo
+  que genera `drizzle-kit` por default para modificar un `CHECK`) toma un
+  lock exclusivo y revalida la tabla entera de una sola pasada; `NOT VALID`
+  separa esa validación completa de la parte que sí necesita el lock
+  exclusivo (agregar la constraint es instantáneo, no mira filas
+  existentes).
+
+  **Verificado, no supuesto** (`packages/db/node_modules/drizzle-orm/pg-core/dialect.js:60`,
+  paquete `drizzle-orm@0.45.2` instalado — `PgDialect.migrate`, llamado desde
+  `drizzle-orm/node-postgres/migrator.js`): el migrador de Drizzle envuelve
+  **todas** las migraciones pendientes de una corrida en un solo
+  `session.transaction(...)`, ejecutando cada archivo `.sql` dentro de ese
+  mismo `tx`. Si el `ADD CONSTRAINT ... NOT VALID` y su `VALIDATE CONSTRAINT`
+  quedan pendientes a la vez (por ejemplo, un ambiente con datos que está
+  atrasado varias migraciones y corre todo junto contra una tabla grande),
+  los dos terminan en la misma transacción: el lock exclusivo del `ADD` se
+  mantiene hasta el `COMMIT` final, y `VALIDATE` revisa la tabla entera
+  todavía adentro de ese lock — exactamente el problema que `NOT VALID`
+  buscaba evitar. Un ambiente que arranca de cero no tiene este riesgo: la
+  tabla está vacía y `VALIDATE` es instantáneo. Por eso la regla es la misma que
+  la regla dura 7 de `DROP COLUMN`: el `VALIDATE CONSTRAINT` es una
+  migración aparte, para un despliegue posterior, nunca agrupada con el
+  `ADD CONSTRAINT ... NOT VALID` en la misma corrida.
+
+  El `ADD CONSTRAINT ... NOT VALID` en sí sigue pidiendo un lock exclusivo
+  breve para registrar la constraint. Si hay una transacción larga abierta
+  sobre esa tabla, el pedido de lock queda encolado y bloquea toda consulta
+  que llegue detrás (incluidas lecturas). Anteponer `SET LOCAL lock_timeout`
+  (en la misma migración, antes del `ALTER TABLE`) hace que falle rápido en
+  vez de congelar la tabla, para reintentarlo después. `LOCAL` importa
+  adentro de la transacción de Drizzle: un `SET` a secas sobrevive al
+  `COMMIT` y queda pegado a la conexión del pool de `app_owner`, afectando
+  migraciones siguientes de otras tablas que no lo necesitan. `SET LOCAL`
+  rige hasta el fin de la corrida, así que alcanza a las migraciones
+  siguientes del mismo *run*.
+
+  `drizzle-kit` no sabe generar `NOT VALID`: la migración que genera para
+  modificar un `CHECK` (`DROP CONSTRAINT` + `ADD CONSTRAINT` a secas) se
+  edita a mano. Para el caso más común, ampliar un `CHECK` ya existente
+  (agregar un valor nuevo a la lista), la secuencia es:
+
+  1. `SET LOCAL lock_timeout = '...'; ALTER TABLE t ADD CONSTRAINT t_check_v2 CHECK (...) NOT VALID;` — la constraint vieja sigue activa, protegiendo.
+  2. `ALTER TABLE t VALIDATE CONSTRAINT t_check_v2;` — despliegue posterior.
+  3. `SET LOCAL lock_timeout = '...'; ALTER TABLE t DROP CONSTRAINT t_check;` — recién ahora, en un tercer paso.
+  4. `ALTER TABLE t RENAME CONSTRAINT t_check_v2 TO t_check;` — sin este paso la base queda con el nombre `_v2` mientras el snapshot de `drizzle-kit` conserva el nombre original, y la próxima migración generada que toque esa constraint falla.
+
+  Mientras la vieja y la nueva conviven (pasos 1 y 2), la vieja sigue
+  rechazando lo que ya rechazaba; nunca hay una ventana sin protección.
+
+  Nada de esto aplica a una tabla recién creada en la misma migración (sin
+  datos todavía no hay nada que revalidar) ni a las migraciones ya
+  aplicadas de este repo (`0007_task_update_reopen_kind.sql` corrió con
+  `task_update` vacía) — es la convención para las que vienen.
+  `0009_project_site_id_check_not_valid.sql` (ADR-013) ya es el primer
+  caso real, no un ejemplo hipotético.
 
 ### El caso de las reservas
 
