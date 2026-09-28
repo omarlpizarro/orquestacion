@@ -98,7 +98,11 @@ describe('ensureDefaultSitesForAllOrganizations (integración)', () => {
         `),
     );
 
-    await expect(insert).rejects.toThrow(/violates check constraint "project_site_id_not_null"/);
+    // SQLSTATE 23514 (check_violation) -- mismo patrón que
+    // collaboration.integration.spec.ts: drizzle-orm envuelve el error de
+    // pg en un DrizzleQueryError cuyo .message es "Failed query: ...", el
+    // código real vive en .cause, no en el mensaje de nivel superior.
+    await expect(insert).rejects.toMatchObject({ cause: { code: '23514' } });
   });
 
   it('repara una organización cuyo sitio se perdió, sin duplicarlo si se corre dos veces', async () => {
