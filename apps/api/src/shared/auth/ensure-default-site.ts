@@ -20,7 +20,7 @@ export interface EnsureDefaultSiteParams {
  * (esa dirección no existe en ningún otro lugar de `shared/`, y agregarla
  * acá rompería el sentido en que `shared/` es más bajo nivel que
  * `modules/`, no al revés). El segundo llamador es
- * `packages/db/scripts/ensure-default-sites.ts` (backfill de
+ * `apps/api/src/scripts/ensure-default-sites.ts` (backfill de
  * organizaciones existentes y reparación si el hook llegó a fallar).
  * `TenancyService.ensureDefaultSite` (`modules/tenancy`) es un envoltorio
  * delgado sobre esta misma función para quien la necesite vía DI de Nest —

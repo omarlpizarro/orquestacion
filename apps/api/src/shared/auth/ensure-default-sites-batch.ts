@@ -30,11 +30,12 @@ export interface EnsureDefaultSitesBatchResult {
  *    apuntándolo al sitio más antiguo de su organización (`order by id`:
  *    UUIDv7 ordena cronológicamente por construcción, no hace falta una
  *    columna `created_at` — que `site` no tiene, ver el ADR). Tiene que
- *    correr antes de que la migración
- *    `0010_project_site_id_not_null_validate.sql` llegue a un ambiente con
- *    proyectos reales: sin este backfill, el `VALIDATE CONSTRAINT` de esa
- *    migración falla apenas encuentra la primera fila vieja con `site_id`
- *    null.
+ *    correr antes de la migración que hace `VALIDATE CONSTRAINT` +
+ *    `SET NOT NULL` sobre `project.site_id` (`0009_project_site_id_check_not_valid.sql`
+ *    agrega el `CHECK ... NOT VALID`; el `VALIDATE` va en un PR aparte, ver
+ *    ese archivo) llegue a un ambiente con proyectos reales: sin este
+ *    backfill, el `VALIDATE CONSTRAINT` falla apenas encuentra la primera
+ *    fila vieja con `site_id` null.
  *
  * Corre con las credenciales de `app_login`, igual que la aplicación —
  * nunca con las de `app_owner` (regla dura 4): esto no es una migración de

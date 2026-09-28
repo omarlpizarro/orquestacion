@@ -21,14 +21,17 @@ import { signUpAndCreateOrg } from './helpers/sign-up-and-create-org.js';
  * Lo que NO prueba este archivo, a propósito: el backfill de `project` con
  * `site_id` null (`ensureDefaultSitesForAllOrganizations`) no tiene un test
  * dedicado, porque no se puede construir la precondición contra el esquema
- * ya migrado — `project.site_id` es `NOT NULL` desde 0010, así que ningún
- * INSERT (ni siquiera con el dueño del esquema: NOT NULL no es una policy
- * de RLS, no hay bypass) puede dejar una fila en ese estado en este
- * harness. Ese camino del código solo importa para un ambiente real que
- * migra estando atrasado, con filas que ya existían antes de 0009/0010 —
- * exactamente lo que la separación en dos despliegues (ver esas
- * migraciones) existe para manejar con cuidado, no algo que un
- * Testcontainers fresco pueda reproducir.
+ * ya migrado — `0009_project_site_id_check_not_valid.sql` agrega un CHECK
+ * `NOT VALID`, que no revisa filas existentes pero sí exige `site_id` en
+ * toda fila NUEVA desde que se aplica (eso es lo que "NOT VALID" separa:
+ * el escaneo del historial, no la validación hacia adelante). Ningún
+ * INSERT puede dejar una fila en ese estado en este harness — ni siquiera
+ * con el dueño del esquema, un CHECK no es una policy de RLS, no hay
+ * bypass. Ese camino del código solo importa para un ambiente real que
+ * migra estando atrasado, con filas que ya existían antes de este archivo
+ * — exactamente lo que la separación en despliegues (ver ese archivo)
+ * existe para manejar con cuidado, no algo que un Testcontainers fresco
+ * pueda reproducir.
  */
 describe('ensureDefaultSitesForAllOrganizations (integración)', () => {
   let harness: PostgresHarness;
@@ -80,7 +83,7 @@ describe('ensureDefaultSitesForAllOrganizations (integración)', () => {
     ]);
   });
 
-  it('un proyecto sin site_id se rechaza: la columna es NOT NULL desde ADR-013', async () => {
+  it('un proyecto sin site_id se rechaza: el CHECK NOT VALID de ADR-013 igual exige site_id en toda fila nueva', async () => {
     const org = await signUpAndCreateOrg(app, 'Frigorífico Sin Sitio');
     const tenant = await resolveTenantIdentity(auth, { cookie: org.cookie });
     if (!tenant) throw new Error('esperaba tenant resuelto tras crear la organización');
@@ -95,7 +98,7 @@ describe('ensureDefaultSitesForAllOrganizations (integración)', () => {
         `),
     );
 
-    await expect(insert).rejects.toThrow(/null value in column "site_id"/);
+    await expect(insert).rejects.toThrow(/violates check constraint "project_site_id_not_null"/);
   });
 
   it('repara una organización cuyo sitio se perdió, sin duplicarlo si se corre dos veces', async () => {

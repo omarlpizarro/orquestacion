@@ -6,19 +6,31 @@
 --   1. Este archivo: agrega un CHECK equivalente con NOT VALID (instantáneo,
 --      no mira filas existentes) — a partir de acá toda fila NUEVA ya exige
 --      site_id, sin haber tocado ninguna fila vieja todavía.
---   2. 0010_project_site_id_not_null_validate.sql, EN OTRO DESPLIEGUE:
---      valida el CHECK, recién ahí convierte la columna a NOT NULL de
---      verdad (Postgres se salta el escaneo completo porque ya hay un CHECK
---      validado que prueba lo mismo) y borra el CHECK, ya redundante.
+--   2. project_site_id_not_null_validate.sql, un PR aparte que se abre
+--      después de que ESTE despliegue (con el backfill de abajo ya corrido)
+--      esté en el servidor: valida el CHECK, recién ahí convierte la
+--      columna a NOT NULL de verdad (Postgres se salta el escaneo completo
+--      porque ya hay un CHECK validado que prueba lo mismo) y borra el
+--      CHECK, ya redundante. No va en este PR — si las dos quedaran
+--      pendientes en la misma corrida de `pnpm db:migrate`, el migrador las
+--      aplicaría en una sola transacción y el VALIDATE prolongaría el lock
+--      exclusivo del ADD, exactamente el problema que NOT VALID existe para
+--      evitar (verificado: `packages/db/node_modules/drizzle-orm/pg-core/dialect.js:60`,
+--      `PgDialect.migrate` envuelve todas las migraciones pendientes de una
+--      corrida en un único `session.transaction(...)`).
 --
--- Antes de que este archivo llegue a un ambiente con datos reales, hay que
--- correr `packages/db/scripts/ensure-default-sites.ts` (documentado ahí):
+-- Antes de que el paso 2 llegue a un ambiente con datos reales, hay que
+-- correr el backfill (`apps/api/src/scripts/ensure-default-sites.ts`):
 -- crea el sitio por defecto de toda organización que todavía no tenga
 -- ninguno, y completa `site_id` en los proyectos que lo tengan null. Sin
--- ese backfill, el VALIDATE del paso 2 falla apenas encuentra la primera
--- fila vieja con `site_id` null — falla segura (el despliegue se aborta),
--- no corrompe nada, pero hay que correr el backfill antes para que no
--- pase.
+-- eso, el VALIDATE del paso 2 falla apenas encuentra la primera fila vieja
+-- con `site_id` null — falla segura (el despliegue se aborta), no corrompe
+-- nada, pero hay que correrlo antes para que no pase. Comando exacto,
+-- necesita `DATABASE_URL`/`BETTER_AUTH_SECRET`/`BETTER_AUTH_URL` del
+-- ambiente (`loadServerEnv`, `packages/config`) y el build compilado
+-- primero (`tsx` no es una dependencia de `apps/api`, a diferencia de
+-- `packages/db/src/migrate.ts`):
+--   pnpm --filter @orq/api build && pnpm --filter @orq/api db:ensure-default-sites
 --
 -- SET LOCAL, no SET a secas: un SET a secas sobrevive al COMMIT de esta
 -- migración y queda pegado a la conexión del pool de `app_owner`, afectando

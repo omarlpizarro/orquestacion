@@ -11,8 +11,15 @@ import { ensureDefaultSite } from './ensure-default-site.js';
  * lanzaría), así que arma su propia transacción de tenant con
  * `withTenantTransaction` en vez de pasar por `TransactionService`. `site`
  * tiene RLS forzada (CLAUDE.md §2 regla 2) — sin `app.current_org` seteado
- * en la transacción, el INSERT no vería ninguna fila propia para comparar
- * y la policy lo rechazaría en silencio (0 filas afectadas, no un error).
+ * en la transacción, el INSERT no pasaría el `WITH CHECK` de la policy
+ * (`organization_id = nullif(current_setting('app.current_org', true), '')`
+ * nunca es `TRUE` si el setting no está, `0001_roles_rls.sql`) y Postgres
+ * lo rechaza con un error explícito — `new row violates row-level
+ * security policy for table "site"` — no en silencio. Ese rechazo
+ * silencioso (0 filas, sin error) es el comportamiento de `UPDATE`/`DELETE`
+ * (filtran por `USING`, no hay fila que falle un chequeo) y de `SELECT`,
+ * no el de un `INSERT` con `WITH CHECK`. La conclusión no cambia: sin la
+ * transacción de tenant, esto no funciona — pero falla ruidoso, no callado.
  * `app.current_member` se completa con `data.member.id`, el miembro que
  * Better Auth acaba de crear como dueño de la organización (`creatorRole`
  * en `build-auth.ts`) — es quien "está haciendo" esto, aunque `site` no
@@ -31,7 +38,7 @@ import { ensureDefaultSite } from './ensure-default-site.js';
  * evitarlo, solo puede fallar la respuesta HTTP de `/organization/create`
  * para que quien la llamó se entere. La reparación de ese caso (y el
  * backfill de organizaciones que ya existían antes de este hook) corren
- * por `packages/db/scripts/ensure-default-sites.ts`, que hace exactamente
+ * por `apps/api/src/scripts/ensure-default-sites.ts`, que hace exactamente
  * lo mismo y es igual de idempotente — seguro de repetir sobre la misma
  * organización.
  */
