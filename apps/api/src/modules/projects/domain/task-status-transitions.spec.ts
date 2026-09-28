@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import type { OrgRole } from '../../../shared/auth/org-role.js';
 import { InvalidTaskStatusTransitionError } from './errors/invalid-task-status-transition.error.js';
 import { ReasonRequiredError } from './errors/reason-required.error.js';
 import { TaskStatusTransitionForbiddenError } from './errors/task-status-transition-forbidden.error.js';
@@ -7,7 +8,6 @@ import {
   findTaskStatusTransition,
   isExcludedFromComplianceKpis,
   isTerminalTaskStatus,
-  type OrgRole,
   type ReasonKind,
   resolveTaskStatusTransition,
   type TaskStatus,

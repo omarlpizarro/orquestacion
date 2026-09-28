@@ -1,17 +1,18 @@
+import { ORG_ROLES, type OrgRole } from '../../../shared/auth/org-role.js';
 import { InvalidTaskStatusTransitionError } from './errors/invalid-task-status-transition.error.js';
 import { ReasonRequiredError } from './errors/reason-required.error.js';
 import { TaskStatusTransitionForbiddenError } from './errors/task-status-transition-forbidden.error.js';
 import { TaskStatusTransitionRequiresAssigneeError } from './errors/task-status-transition-requires-assignee.error.js';
-import type { OrgRole, ReasonKind, TaskStatus } from './task-status.js';
+import type { ReasonKind, TaskStatus } from './task-status.js';
 
-export {
-  type OrgRole,
-  parseSingleOrgRole,
-  type ReasonKind,
-  type TaskStatus,
-} from './task-status.js';
+export type { OrgRole } from '../../../shared/auth/org-role.js';
+export type { ReasonKind, TaskStatus } from './task-status.js';
 
-const ALL_ROLES: readonly OrgRole[] = ['owner', 'director', 'manager', 'operator'];
+// Mismo conjunto que `ORG_ROLES` (`shared/auth/org-role.ts`): todos los
+// roles reales pueden hacer esta transición. No se reasigna `ORG_ROLES`
+// directo para que el nombre acá exprese la intención ("todos los roles
+// valen para esta transición"), no la fuente del dato.
+const ALL_ROLES: readonly OrgRole[] = ORG_ROLES;
 const MANAGEMENT_ROLES: readonly OrgRole[] = ['owner', 'director', 'manager'];
 
 export interface TaskStatusTransition {

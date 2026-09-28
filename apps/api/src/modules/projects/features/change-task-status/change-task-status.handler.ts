@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { newId, type TaskOutput } from '@orq/contracts';
 import type { Tx } from '@orq/db';
+import { parseSingleOrgRole } from '../../../../shared/auth/org-role.js';
 import { findPriorMutation, recordMutation } from '../../../../shared/database/mutation-log.js';
 import {
   hasPostgresErrorCode,
@@ -17,7 +18,6 @@ import {
 import { TaskNotFoundError } from '../../domain/errors/task-not-found.error.js';
 import { TaskVersionMismatchError } from '../../domain/errors/task-version-mismatch.error.js';
 import {
-  parseSingleOrgRole,
   type ReasonKind,
   resolveTaskStatusTransition,
   type TaskStatus,
