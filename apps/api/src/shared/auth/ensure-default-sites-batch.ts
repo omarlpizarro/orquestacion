@@ -37,6 +37,14 @@ export interface EnsureDefaultSitesBatchResult {
  *    backfill, el `VALIDATE CONSTRAINT` falla apenas encuentra la primera
  *    fila vieja con `site_id` null.
  *
+ *    **Sin uso a partir de `0010_project_site_id_not_null_validate.sql`:**
+ *    desde esa migración `project.site_id` es `NOT NULL`, así que la base
+ *    no admite filas con `site_id` null y este `UPDATE` nunca vuelve a
+ *    encontrar nada (`projectsBackfilled` queda siempre en 0). Se deja el
+ *    código en vez de borrarlo: el paso 1 sigue siendo útil por sí solo y
+ *    quitar esta parte no cambia ningún comportamiento. Tampoco tiene test
+ *    dedicado, ni lo va a tener: la precondición no se puede construir.
+ *
  * Corre con las credenciales de `app_login`, igual que la aplicación —
  * nunca con las de `app_owner` (regla dura 4): esto no es una migración de
  * esquema, son INSERT/UPDATE comunes sobre tablas con RLS forzada, así que
@@ -93,6 +101,8 @@ export async function ensureDefaultSitesForAllOrganizations(
           await ensureDefaultSite(tx, { organizationId });
           if (!before.rows[0]) sitesCreated += 1;
 
+          // Sin uso desde 0010 (`site_id` NOT NULL): no puede haber filas que
+          // coincidan. Ver el comentario del punto 2 arriba.
           const backfilled = await tx.execute<{ id: string }>(sql`
             update project
             set site_id = (
