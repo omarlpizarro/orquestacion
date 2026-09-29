@@ -15,6 +15,14 @@
 # tener reglas más estrictas y negarse. Con --to corre siempre la versión
 # actual del script, que es quien hace el checkout.
 #
+# Después del pull, el script se relanza a sí mismo (`exec ... --no-pull`) para
+# correr la versión nueva: Bash sigue ejecutando la que ya tenía cargada, y sin
+# esto cualquier cambio a este archivo regiría recién en el deploy siguiente.
+# Consecuencia: los chequeos previos corren dos veces, la segunda con las reglas
+# nuevas. Con `--to` no se relanza a propósito: ahí se quiere la versión actual,
+# no la del commit destino. La primera vez que un deploy trae este mecanismo
+# todavía corre la versión vieja, sin relanzamiento; rige desde el siguiente.
+#
 # Orden fijo: pull -> build -> migraciones -> reinicio. Las migraciones son un
 # paso explícito y nunca corren al arrancar el contenedor de la API
 # (CLAUDE.md §6: despliegues separados). Si un paso falla, `set -e` corta ahí:
@@ -114,6 +122,17 @@ if [ -n "$target" ]; then
 elif $pull; then
   step 1/5 "git pull --ff-only"
   git_repo pull --ff-only
+  # Bash sigue ejecutando la versión de este script que ya cargó: si el pull
+  # la cambió, los cambios regirían recién en el despliegue siguiente. Se
+  # relanza con lo que quedó en disco para que un deploy siempre corra la
+  # versión que está en main. DEPLOY_REEXEC corta el bucle: el proceso
+  # relanzado no vuelve a relanzarse.
+  if [ -z "${DEPLOY_REEXEC:-}" ]; then
+    echo "Relanzando deploy.sh con la versión de $(git_repo rev-parse --short HEAD)."
+    DEPLOY_REEXEC=1 exec "$repo_root/scripts/deploy.sh" --no-pull
+  fi
+elif [ -n "${DEPLOY_REEXEC:-}" ]; then
+  step 1/5 "git pull (hecho antes del relanzamiento)"
 else
   step 1/5 "git pull (omitido por --no-pull)"
 fi
