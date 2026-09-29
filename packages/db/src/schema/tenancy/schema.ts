@@ -65,12 +65,8 @@ export const memberSiteAccess = pgTable(
     organizationId: text('organization_id').notNull(),
     memberId: text('member_id').notNull(),
     siteId: uuid('site_id').notNull(),
-    role: text('role').notNull(),
   },
-  (table) => [
-    primaryKey({ columns: [table.memberId, table.siteId] }),
-    check('member_site_access_role_check', sql`${table.role} in ('manager','operator')`),
-  ],
+  (table) => [primaryKey({ columns: [table.memberId, table.siteId] })],
 );
 
 export const guestLink = pgTable(

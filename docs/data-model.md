@@ -119,11 +119,12 @@ CREATE TABLE member_site_access (
   organization_id  text NOT NULL,
   member_id        text NOT NULL,
   site_id          uuid NOT NULL,
-  role             text NOT NULL CHECK (role IN ('manager','operator')),
   PRIMARY KEY (member_id, site_id),
   FOREIGN KEY (organization_id, site_id) REFERENCES site (organization_id, id)
 );
 ```
+
+La tabla significa solo "este miembro trabaja en este sitio": no tiene rol (ADR-015). El rol de un miembro sale siempre de la organización (`auth.member.role`).
 
 Un `owner` o `director` no necesita filas acá: ve todos los sitios. La ausencia de filas para un `manager` significa que todavía no tiene nada asignado, no que ve todo.
 
@@ -976,23 +977,24 @@ slices siguientes contra una conexión que en los hechos ignora las policies.
 | `0008` | `task_my_day_indexes` | `(organization_id, assignee_member_id, status, planned_end_at)` parcial `WHERE deleted_at IS NULL` (vista "Mi Día") y `(organization_id, project_id, parent_task_id)` (`findLastSiblingPosition`, faltaba desde `0005`) | Hecha |
 | `0009` | `project_site_id_check_not_valid` | `ALTER TABLE project ADD CONSTRAINT ... CHECK (site_id IS NOT NULL) NOT VALID` (ADR-013, primer caso real de la convención NOT VALID + VALIDATE de CLAUDE.md §6) | Hecha |
 | `0010` | `project_site_id_not_null_validate` | `VALIDATE CONSTRAINT` + `ALTER COLUMN site_id SET NOT NULL` + `DROP` el CHECK temporal de `0009`, en despliegue separado (ADR-013) | Hecha |
-| `0011` | `templates` | `sop_template`, `sop_template_task` | Pendiente |
-| `0012` | `custom_fields` | `custom_field_definition`, índices GIN | Pendiente |
-| `0013` | `resources` | `resource`, `resource_booking` con la exclusion constraint | Pendiente |
-| `0014` | `dependencies` | `task_dependency`, función anti-ciclos, `schedule_change` | Pendiente |
-| `0015` | `collaboration` (resto) | `attachment`, `task_acknowledgement` | Pendiente |
-| `0016` | `audit` | `audit_log` particionada, `audit_trigger()`, `REVOKE` | Pendiente |
-| `0017` | `notifications` | `notification`, `notification_preference`, `escalation_policy` | Pendiente |
-| `0018` | `sync` | Publicación lógica, `wal_level` (ya no `mutation_log`, adelantada a `0004`) | Pendiente |
-| `0019` | `billing` | `plan`, `subscription`, `payment_event`, `usage_counter` | Pendiente |
-| `0020` | `analytics` | `project_kpi` materializada y su job de refresco | Pendiente |
-| `0021` | `seed` | Planes, plantillas SOP por industria, catálogos iniciales | Pendiente |
+| `0011` | `member_site_access_drop_role` | `DROP COLUMN role` de `member_site_access` (ADR-015: la tabla significa solo "este miembro trabaja en este sitio", el rol sale de la organización). Excepción razonada a la regla 7: ningún código la usó nunca y la tabla está vacía | Hecha |
+| `0012` | `templates` | `sop_template`, `sop_template_task` | Pendiente |
+| `0013` | `custom_fields` | `custom_field_definition`, índices GIN | Pendiente |
+| `0014` | `resources` | `resource`, `resource_booking` con la exclusion constraint | Pendiente |
+| `0015` | `dependencies` | `task_dependency`, función anti-ciclos, `schedule_change` | Pendiente |
+| `0016` | `collaboration` (resto) | `attachment`, `task_acknowledgement` | Pendiente |
+| `0017` | `audit` | `audit_log` particionada, `audit_trigger()`, `REVOKE` | Pendiente |
+| `0018` | `notifications` | `notification`, `notification_preference`, `escalation_policy` | Pendiente |
+| `0019` | `sync` | Publicación lógica, `wal_level` (ya no `mutation_log`, adelantada a `0004`) | Pendiente |
+| `0020` | `billing` | `plan`, `subscription`, `payment_event`, `usage_counter` | Pendiente |
+| `0021` | `analytics` | `project_kpi` materializada y su job de refresco | Pendiente |
+| `0022` | `seed` | Planes, plantillas SOP por industria, catálogos iniciales | Pendiente |
 
 `0009`/`0010` (site_id obligatorio, ADR-013) no estaban en el plan original — se adelantan por la misma razón que `mutation_log` y `task_update`: el alcance por sitio, que sigue en fase 2, necesita la columna cerrada primero. Corrieron ellas dos en el lugar de `templates`/`custom_fields`, que se corren un lugar cada una.
 
-`0000` a `0015` son la v1. `0016` a `0021` acompañan las fases posteriores, pero conviene escribirlas al mismo tiempo para que el esquema quede coherente de entrada.
+`0000` a `0016` son la v1. `0017` a `0022` acompañan las fases posteriores, pero conviene escribirlas al mismo tiempo para que el esquema quede coherente de entrada.
 
-Regla de operación: ninguna migración hace `DROP COLUMN` en el mismo despliegue que deja de usarla. Primero se deja de escribir, se despliega, se verifica, y recién en un despliegue posterior se borra. Con clientes en el campo que corren versiones viejas de la app móvil, esa disciplina es lo que evita cortes.
+Regla de operación: ninguna migración hace `DROP COLUMN` en el mismo despliegue que deja de usarla. Primero se deja de escribir, se despliega, se verifica, y recién en un despliegue posterior se borra. Con clientes en el campo que corren versiones viejas de la app móvil, esa disciplina es lo que evita cortes. La única excepción hecha hasta ahora es `0011` (ADR-015): una columna que ningún código leyó ni escribió nunca, en una tabla vacía; no sienta precedente para una columna que el código sí usa.
 
 ### Decisiones abiertas
 

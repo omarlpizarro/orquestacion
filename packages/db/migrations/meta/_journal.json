@@ -78,6 +78,13 @@
       "when": 1790626481961,
       "tag": "0010_project_site_id_not_null_validate",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1790717368466,
+      "tag": "0011_member_site_access_drop_role",
+      "breakpoints": true
     }
   ]
 }
