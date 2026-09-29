@@ -90,7 +90,7 @@ todavía (ver `docs/phase-2-brief.md`).
 
 ### Primera vez
 
-En el server (`ssh lomaro@192.168.0.105`), dentro del clon del repo:
+Clonar `main` (el deploy no acepta otra rama). En el server (`ssh lomaro@192.168.0.105`), dentro del clon del repo:
 
 ```bash
 git clone https://github.com/omarlpizarro/orquestacion.git ~/orquestacion
@@ -124,9 +124,18 @@ Hace, en este orden y cortando en el primer error:
 5. Reinicio de la API y espera a que quede `healthy`.
 
 Al final compara el commit que devuelve `/health` con el desplegado. Si una
-migración falla, la API vieja sigue corriendo. `scripts/deploy.sh --no-pull`
-despliega lo que ya está checkouteado. Se niega a correr con el árbol sucio o
-con algún `CHANGE_ME` en `.env`, y si el puerto de la API lo usa otro proceso.
+migración falla, la API vieja sigue corriendo.
+
+**El server solo corre lo que está mergeado a `main`.** `deploy.sh` se niega a
+correr si no estás en `main`, si `main` local tiene commits que no están en
+`origin/main` o si el árbol está sucio; no hay flag para saltearlo.
+`scripts/deploy.sh --no-pull` despliega la `main` local, que en ese caso tiene
+que coincidir exactamente con `origin/main`. También se niega con algún
+`CHANGE_ME` en `.env`, o si el puerto de la API lo usa otro proceso.
+
+Las decisiones detrás de este mecanismo (Compose a mano en vez de Coolify,
+build en el servidor, migraciones como contenedor efímero, HTTP en la LAN) y
+qué las cambiaría están en [ADR-014](./docs/adr/014-despliegue-en-servidor-de-demo.md).
 
 Las migraciones no se revierten: volver a un commit anterior no deshace el
 esquema. Las que tienen `NOT VALID`/`VALIDATE` van en despliegues separados
@@ -184,10 +193,15 @@ scripts/smoke-test.sh
 ```
 
 Verifica: `/health` (conecta como `app_login`, devuelve el commit desplegado),
-Postgres sin puerto publicado, alta de usuario con cookies coherentes con el
-esquema de `BETTER_AUTH_URL` y sesión que persiste, alta de organización con
+Postgres sin puerto publicado, cuenta de humo con cookies coherentes con el
+esquema de `BETTER_AUTH_URL` y sesión que persiste, organización de humo con
 sitio por defecto (ADR-013) y `ensure-default-sites` corriendo dentro del
-contenedor. Deja un usuario y una organización `smoke-*` en la base de demo.
+contenedor.
+
+Es idempotente: usa siempre la cuenta `smoke@orquestacion.test` y la
+organización con slug `smoke`. Si existen, inicia sesión y las reutiliza; si
+no, las crea. El password de la cuenta es `SMOKE_PASSWORD` en
+`infra/docker/.env`; si falta, la primera corrida lo genera y lo agrega.
 
 ## Flujo de trabajo
 

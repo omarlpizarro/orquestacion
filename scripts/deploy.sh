@@ -2,7 +2,9 @@
 # Despliegue en el server de demo. Se corre en el server, dentro del clon del repo:
 #
 #   scripts/deploy.sh             # pull, build, migraciones, reinicio
-#   scripts/deploy.sh --no-pull   # despliega lo que ya está checkouteado
+#   scripts/deploy.sh --no-pull   # despliega la main local, que ya debe coincidir con origin/main
+#
+# Exige estar en main, sincronizado con origin/main y con el árbol limpio.
 #
 # Orden fijo: pull -> build -> migraciones -> reinicio. Las migraciones son un
 # paso explícito y nunca corren al arrancar el contenedor de la API
@@ -36,6 +38,21 @@ fi
 # /health va a declarar.
 if [ -n "$(git -C "$repo_root" status --porcelain --untracked-files=no)" ]; then
   die "El árbol de trabajo tiene cambios sin commitear; el commit que reportaría /health sería mentira."
+fi
+
+# El server solo corre lo que está mergeado a main. Sin excepciones ni flag
+# para saltearlo: desplegar una rama sin revisar fue la excepción que sirvió
+# para arrancar este mecanismo, no una opción permanente.
+branch="$(git -C "$repo_root" branch --show-current)"
+[ "$branch" = "main" ] || die "Solo se despliega desde main (estás en '${branch:-HEAD desacoplado}')."
+git -C "$repo_root" fetch --quiet origin main
+if $pull; then
+  # Con pull, alcanza con que main local no se haya adelantado ni divergido.
+  git -C "$repo_root" merge-base --is-ancestor HEAD origin/main \
+    || die "main local tiene commits que no están en origin/main."
+else
+  [ "$(git -C "$repo_root" rev-parse HEAD)" = "$(git -C "$repo_root" rev-parse origin/main)" ] \
+    || die "main local no coincide con origin/main. Corré sin --no-pull o actualizá a mano."
 fi
 
 set -a
