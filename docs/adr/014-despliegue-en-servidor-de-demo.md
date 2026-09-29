@@ -5,8 +5,9 @@
 
 ## Contexto
 
-`CLAUDE.md` §3 fija la infraestructura como "Docker Compose sobre Ubuntu LTS,
-gestionado con Coolify". Antes de tener un ambiente real hacía falta
+`CLAUDE.md` §3 fijaba la infraestructura como "Docker Compose sobre Ubuntu LTS,
+gestionado con Coolify"; esta decisión la cambió a "Docker Compose a mano en
+Ubuntu, ver ADR-014". Antes de tener un ambiente real hacía falta
 comprobar que el mecanismo de despliegue funciona de punta a punta:
 construir la imagen, migrar, reiniciar, verificar qué commit corre y operar
 scripts dentro del contenedor. La pasada del 2026-09-29 lo hizo sobre el
@@ -37,10 +38,10 @@ entorno de otros proyectos por un objetivo que no lo necesita. Compose a mano
 es lo mismo que ya usan sus vecinos, se puede leer entero en un archivo y se
 borra con un comando.
 
-**Desvío consciente de `CLAUDE.md` §3.** La fila de infraestructura sigue
-diciendo Coolify. Esto no la reemplaza: dice que **este servidor de demo** no
-lo usa. Cuando exista un ambiente propio hay que decidir si el destino es
-Coolify o si este mecanismo se queda.
+**Efecto sobre `CLAUDE.md` §3.** La fila de infraestructura deja de decir
+Coolify y pasa a "Docker Compose a mano en Ubuntu, ver ADR-014". Se decidió
+así porque hoy no hay otro ambiente: si más adelante se adopta Coolify para un
+ambiente propio, esa fila y este ADR se revisan juntos.
 
 **Qué haría cambiarla.** Un servidor dedicado a este proyecto; necesitar más
 de un ambiente (staging y producción) con despliegues desde la interfaz;
@@ -130,8 +131,9 @@ poder probarlo; de ahí en adelante el servidor corre únicamente lo mergeado.
 
 ## Consecuencias
 
-- Hay dos mecanismos de despliegue posibles en el proyecto (este y Coolify) hasta
-  que se decida el ambiente real; `CLAUDE.md` §3 sigue nombrando a Coolify.
+- Coolify deja de ser el destino declarado en `CLAUDE.md` §3. Si un ambiente
+  propio lo justifica (ver "Qué haría cambiarla" en 1), se revisa esa fila junto
+  con este ADR.
 - Ninguna variable de storage existe todavía; el slice de adjuntos las agrega
   junto con MinIO en el compose (ver el brief).
 - Antes de exponer el servidor a internet o cargar datos de un piloto faltan
