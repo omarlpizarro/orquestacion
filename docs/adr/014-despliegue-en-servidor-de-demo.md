@@ -61,12 +61,14 @@ verificable: la imagen sale del commit checkouteado, y `deploy.sh` se niega a
 correr con el árbol sucio para que esa afirmación sea cierta.
 
 **Costos aceptados.** El build gasta CPU y memoria de un servidor compartido.
-Depende de la red (registro de npm y Docker Hub) en cada deploy. Volver a un
-commit anterior implica reconstruirlo, no bajar una imagen ya probada.
+Depende de la red (registro de npm y Docker Hub) en cada deploy. Una vuelta
+atrás (`deploy.sh --to <commit>`) reutiliza la imagen de ese commit mientras
+esté entre las últimas tres que conserva el deploy; si ya se borró, hay que
+reconstruirla, no se baja una imagen ya probada.
 
 **Qué haría cambiarla.** Un segundo ambiente que deba correr *exactamente* la
 imagen que pasó en el primero; que el build empiece a afectar a los otros
-proyectos del servidor; necesitar rollback rápido sin reconstruir; o
+proyectos del servidor; necesitar volver atrás a versiones más viejas que las últimas tres imágenes sin reconstruir; o
 exigencias de cadena de suministro (imágenes firmadas, escaneo). El destino
 sería que CI construya y publique en un registry (por ejemplo GHCR) y el
 servidor haga `pull` por digest.

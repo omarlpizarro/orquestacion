@@ -116,30 +116,75 @@ scripts/deploy.sh
 Hace, en este orden y cortando en el primer error:
 
 1. `git pull --ff-only`.
-2. Build de la imagen, etiquetada con el commit.
+2. Imagen de la API, etiquetada con el commit: se construye, o se reutiliza si
+   ya existe una con ese tag.
 3. Postgres arriba (prerrequisito de migrar, no un reinicio).
 4. **Migraciones** como paso explícito, en un contenedor efímero con las
    credenciales de `app_owner`. La API nunca las recibe ni migra al arrancar
    (regla de despliegues separados, `CLAUDE.md` sección 6).
 5. Reinicio de la API y espera a que quede `healthy`.
 
-Al final compara el commit que devuelve `/health` con el desplegado. Si una
-migración falla, la API vieja sigue corriendo.
+Al final compara el commit que devuelve `/health` con el desplegado y, solo si
+salió todo bien, borra imágenes viejas (ver más abajo). Si una migración falla,
+la API vieja sigue corriendo.
 
-**El server solo corre lo que está mergeado a `main`.** `deploy.sh` se niega a
-correr si no estás en `main`, si `main` local tiene commits que no están en
-`origin/main` o si el árbol está sucio; no hay flag para saltearlo.
-`scripts/deploy.sh --no-pull` despliega la `main` local, que en ese caso tiene
-que coincidir exactamente con `origin/main`. También se niega con algún
-`CHANGE_ME` en `.env`, o si el puerto de la API lo usa otro proceso.
+**El server solo corre lo que está mergeado a `main`.** La regla es que el
+commit a desplegar sea ancestro de `origin/main` (`git merge-base --is-ancestor`):
+`origin/main` misma, o cualquier versión anterior. `deploy.sh` se niega si no
+lo es, si el árbol está sucio, si el pull no se hace desde `main` o si `main`
+local tiene commits que no están en `origin/main`; no hay flag para saltearlo.
+También se niega con algún `CHANGE_ME` en `.env`, o si el puerto de la API lo
+usa otro proceso.
 
 Las decisiones detrás de este mecanismo (Compose a mano en vez de Coolify,
 build en el servidor, migraciones como contenedor efímero, HTTP en la LAN) y
 qué las cambiaría están en [ADR-014](./docs/adr/014-despliegue-en-servidor-de-demo.md).
 
-Las migraciones no se revierten: volver a un commit anterior no deshace el
-esquema. Las que tienen `NOT VALID`/`VALIDATE` van en despliegues separados
-(`CLAUDE.md` sección 6): no agrupes las dos en un mismo `deploy.sh`.
+Las migraciones que tienen `NOT VALID`/`VALIDATE` van en despliegues
+separados (`CLAUDE.md` sección 6): no agrupes las dos en un mismo `deploy.sh`.
+
+### Volver a una versión anterior
+
+```bash
+cd ~/orquestacion
+git fetch && git log --oneline -15 origin/main   # elegí el commit destino
+docker image ls orquestacion-api                  # ¿su imagen sigue ahí?
+scripts/deploy.sh --to <commit>
+scripts/smoke-test.sh
+```
+
+`--to` verifica que el commit sea ancestro de `origin/main` (y que sea
+posterior al mecanismo de despliegue), hace el checkout desacoplado y despliega
+con los mismos pasos de siempre. Si la imagen de ese commit sigue entre las
+últimas tres no se reconstruye: la vuelta atrás es solo reinicio. Por qué
+`--to` y no `git checkout <commit>` a mano: eso ejecutaría el `deploy.sh` *de
+ese commit viejo*, que puede tener reglas más estrictas y negarse.
+
+Qué hay que saber antes de usarlo:
+
+- **Las migraciones no se revierten.** La base queda como está; el código
+  viejo corre contra el esquema nuevo. Es seguro porque `CLAUDE.md` sección 6
+  exige que las migraciones solo agreguen y no rompan lo que usa el código
+  anterior. `deploy.sh` avisa cuando la base tiene más migraciones de las que
+  conoce ese commit; ese aviso es el momento de confirmar que las
+  intermedias cumplen esa regla. El migrador de Drizzle solo aplica lo
+  posterior a la última migración registrada
+  (`drizzle-orm/pg-core/dialect.js:60`), así que con un commit viejo no hace
+  nada.
+- El server queda en `HEAD` desacoplado en ese commit. **Para volver
+  adelante:** `git checkout main && scripts/deploy.sh`. El deploy normal se
+  niega desde un HEAD desacoplado.
+- Los commits anteriores al primero que trae `infra/docker/compose.server.yml`
+  no se pueden desplegar: `--to` se niega.
+
+### Imágenes
+
+Cada deploy exitoso conserva las 3 imágenes más recientes de
+`orquestacion-api` (más la desplegada, si es una más vieja tras una vuelta
+atrás) y borra el resto. Solo toca ese repositorio: en el server hay imágenes
+de otros proyectos, y no se corre `docker image prune` ni `docker builder
+prune` porque son globales. Un despliegue que falla no borra nada, porque las
+imágenes anteriores son justo las que hacen falta para volver.
 
 ### Puertos y aislamiento
 

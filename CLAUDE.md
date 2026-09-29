@@ -202,6 +202,21 @@ Detalle completo en `docs/data-model.md`. Lo mínimo que tenés que respetar sie
   `0001_roles_rls`, la segunda en `0005_projects`, ver
   `packages/db/migrations/`). Las dos son idempotentes: cubren la tabla
   nueva sin tener que escribir la policy o el trigger de `version` a mano.
+- **Las migraciones solo agregan; nunca rompen lo que usa el código anterior.**
+  Cada migración tiene que dejar funcionando la versión del código que estaba
+  desplegada *antes* de ella, por dos motivos: entre el paso de migraciones y
+  el reinicio de la API (`scripts/deploy.sh`) el código viejo corre contra el
+  esquema nuevo, y una vuelta atrás (`deploy.sh --to <commit>`) vuelve a poner
+  código viejo sobre un esquema que las migraciones nunca revierten.
+  Concretamente: sí tablas, columnas nulables o con default, índices y
+  constraints nuevos; no renombrar ni cambiar el tipo de una columna, ni
+  hacerle `DROP` (regla dura 7), ni agregar en un solo paso una restricción
+  que el código anterior podría violar (un `NOT NULL`, un `CHECK`, una
+  `FOREIGN KEY`). Esos cambios van en pasos separados —expandir, migrar el
+  código, contraer—, que es lo que ya hacen `NOT VALID` + `VALIDATE`
+  (`0009`/`0010`, ADR-013): primero el código y un `CHECK ... NOT VALID` hacen
+  que nada nuevo viole la restricción, y recién después se endurece la base.
+  Una migración que no cumpla esto no se puede revertir con una vuelta atrás.
 - **El código de aplicación consulta con SQL crudo** (`tx.execute(sql\`...\`)`),
   nunca con el query builder de Drizzle importando los objetos de tabla
   (`db.select().from(task)`). Los esquemas de `packages/db/src/schema/` son
