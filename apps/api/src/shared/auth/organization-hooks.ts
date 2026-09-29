@@ -2,6 +2,7 @@ import { newId } from '@orq/contracts';
 import type { Db } from '@orq/db';
 import { withTenantTransaction } from '@orq/db';
 import { ensureDefaultSite } from './ensure-default-site.js';
+import { grantAccessToSingleSite } from './member-site-access.js';
 
 /**
  * ADR-013: crea el sitio por defecto de una organización recién creada.
@@ -50,5 +51,39 @@ export async function handleOrganizationCreated(
     db,
     { organizationId: data.organization.id, memberId: data.member.id, requestId: newId() },
     (tx) => ensureDefaultSite(tx, { organizationId: data.organization.id }),
+  );
+}
+
+/**
+ * ADR-016: un miembro que se acaba de sumar a una organización de un solo
+ * sitio recibe acceso a él (`grantAccessToSingleSite`). Corre desde dos hooks
+ * de Better Auth, porque hay dos formas de sumar a alguien y ninguna dispara
+ * el hook de la otra (verificado en el paquete instalado,
+ * `dist/plugins/organization/routes/`): `addMember` de la API de servidor
+ * dispara `afterAddMember` (`crud-members.mjs`), y aceptar una invitación
+ * crea el miembro directo con el adaptador y dispara solo
+ * `afterAcceptInvitation` (`crud-invites.mjs`). Es idempotente, así que si un
+ * flujo llegara a disparar los dos no pasa nada.
+ *
+ * Misma situación que `handleOrganizationCreated` (ADR-013): no hay
+ * `RequestContext`, así que arma su propia transacción de tenant (con el
+ * miembro nuevo como `app.current_member`), y el miembro ya está confirmado
+ * cuando esto corre — si falla, el miembro queda sin acceso y el error se
+ * propaga en vez de tragarse. Se repara otorgándole el acceso a mano
+ * (`grant-site-access`).
+ */
+export async function handleMemberJoined(
+  db: Db,
+  data: { organizationId: string; member: { id: string; role: string } },
+): Promise<void> {
+  await withTenantTransaction(
+    db,
+    { organizationId: data.organizationId, memberId: data.member.id, requestId: newId() },
+    (tx) =>
+      grantAccessToSingleSite(tx, {
+        organizationId: data.organizationId,
+        memberId: data.member.id,
+        role: data.member.role,
+      }),
   );
 }
