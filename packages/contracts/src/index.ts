@@ -3,9 +3,13 @@ import { healthContract } from './health/health.contract.js';
 import { changeTaskStatusContract } from './projects/change-task-status.contract.js';
 import { createTaskContract } from './projects/create-task.contract.js';
 import { myDayContract } from './projects/my-day.contract.js';
+import { grantSiteAccessContract } from './tenancy/grant-site-access.contract.js';
 
 export const contract = populateContractRouterPaths({
   health: healthContract,
+  tenancy: {
+    grantSiteAccess: grantSiteAccessContract,
+  },
   projects: {
     createTask: createTaskContract,
     changeTaskStatus: changeTaskStatusContract,
@@ -44,3 +48,10 @@ export { idSchema, newId } from './shared/id.js';
 export { localDateTimeSchema } from './shared/local-datetime.js';
 export { memberIdSchema } from './shared/member-id.js';
 export { ianaTimeZoneSchema } from './shared/time-zone.js';
+export {
+  type GrantSiteAccessInput,
+  type GrantSiteAccessOutput,
+  grantSiteAccessContract,
+  grantSiteAccessInputSchema,
+  grantSiteAccessOutputSchema,
+} from './tenancy/grant-site-access.contract.js';

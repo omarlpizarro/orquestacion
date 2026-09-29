@@ -54,3 +54,14 @@ export function parseSingleOrgRole(roleString: string): OrgRole {
   }
   return role as OrgRole;
 }
+
+/**
+ * `owner` y `director` (nivel 1, `CLAUDE.md` §7) trabajan en todos los sitios
+ * de la organización sin tener filas en `member_site_access`; `manager` y
+ * `operator` solo en los sitios donde tienen una fila. Es la única definición
+ * de esa frontera: la usan tanto quien otorga accesos (no tiene sentido
+ * darle una fila a quien ya lo tiene todo) como quien los consulta.
+ */
+export function hasImplicitAllSitesAccess(role: OrgRole): boolean {
+  return role === 'owner' || role === 'director';
+}

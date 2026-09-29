@@ -3,6 +3,7 @@ import { APP_FILTER } from '@nestjs/core';
 import { ORPCModule } from '@orpc/nest';
 import { PlatformModule } from './modules/platform/platform.module.js';
 import { ProjectsModule } from './modules/projects/projects.module.js';
+import { TenancyModule } from './modules/tenancy/tenancy.module.js';
 import { AuthModule } from './shared/auth/auth.module.js';
 import { ConfigModule } from './shared/config/config.module.js';
 import { DatabaseModule } from './shared/database/database.module.js';
@@ -16,6 +17,7 @@ import { RequestContextMiddleware } from './shared/request-context/request-conte
     AuthModule,
     ORPCModule.forRoot({}),
     PlatformModule,
+    TenancyModule,
     ProjectsModule,
   ],
   providers: [{ provide: APP_FILTER, useClass: DomainErrorFilter }],

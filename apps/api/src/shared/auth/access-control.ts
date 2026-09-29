@@ -17,6 +17,7 @@ export const statement = {
   member: ['create', 'update', 'delete'],
   invitation: ['create', 'cancel'],
   task: ['create'],
+  site: ['grant_access'],
 } as const;
 
 export const accessControl = createAccessControl(statement);
@@ -26,6 +27,7 @@ export const ownerRole = accessControl.newRole({
   member: ['create', 'update', 'delete'],
   invitation: ['create', 'cancel'],
   task: ['create'],
+  site: ['grant_access'],
 });
 
 export const directorRole = accessControl.newRole({
@@ -33,6 +35,7 @@ export const directorRole = accessControl.newRole({
   member: ['create', 'update', 'delete'],
   invitation: ['create', 'cancel'],
   task: ['create'],
+  site: ['grant_access'],
 });
 
 /** Alcance por sitio (`member_site_access`) se resuelve aparte, en dominio. */

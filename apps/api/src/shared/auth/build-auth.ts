@@ -4,7 +4,7 @@ import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { organization } from 'better-auth/plugins';
 import { accessControl, organizationRoles } from './access-control.js';
-import { handleOrganizationCreated } from './organization-hooks.js';
+import { handleMemberJoined, handleOrganizationCreated } from './organization-hooks.js';
 
 /**
  * Factory pura, sin efectos de lado: `AuthModule` la llama con el `Db` y el
@@ -51,6 +51,20 @@ export function buildAuth(env: ServerEnv, db: Db) {
         organizationHooks: {
           afterCreateOrganization: async (data) => {
             await handleOrganizationCreated(db, data);
+          },
+          // ADR-016: dos hooks porque hay dos formas de sumar a un miembro y
+          // ninguna dispara el hook de la otra (ver `handleMemberJoined`).
+          afterAddMember: async (data) => {
+            await handleMemberJoined(db, {
+              organizationId: data.organization.id,
+              member: data.member,
+            });
+          },
+          afterAcceptInvitation: async (data) => {
+            await handleMemberJoined(db, {
+              organizationId: data.organization.id,
+              member: data.member,
+            });
           },
         },
       }),

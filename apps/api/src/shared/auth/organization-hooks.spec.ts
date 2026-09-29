@@ -2,7 +2,8 @@ import type { Db, Tx } from '@orq/db';
 import { withTenantTransaction } from '@orq/db';
 import { describe, expect, it, vi } from 'vitest';
 import { ensureDefaultSite } from './ensure-default-site.js';
-import { handleOrganizationCreated } from './organization-hooks.js';
+import { grantAccessToSingleSite } from './member-site-access.js';
+import { handleMemberJoined, handleOrganizationCreated } from './organization-hooks.js';
 
 vi.mock('@orq/db', () => ({
   withTenantTransaction: vi.fn((_db: unknown, _ctx: unknown, handler: (tx: Tx) => unknown) =>
@@ -10,6 +11,7 @@ vi.mock('@orq/db', () => ({
   ),
 }));
 vi.mock('./ensure-default-site.js', () => ({ ensureDefaultSite: vi.fn() }));
+vi.mock('./member-site-access.js', () => ({ grantAccessToSingleSite: vi.fn() }));
 
 describe('handleOrganizationCreated', () => {
   it('abre una transacción de tenant con el id de la organización y del member recién creados', async () => {
@@ -44,6 +46,37 @@ describe('handleOrganizationCreated', () => {
       handleOrganizationCreated({} as Db, {
         organization: { id: 'org_2' },
         member: { id: 'member_2' },
+      }),
+    ).rejects.toThrow('boom');
+  });
+});
+
+describe('handleMemberJoined', () => {
+  it('abre una transacción de tenant con el miembro nuevo y le pasa su rol a grantAccessToSingleSite', async () => {
+    await handleMemberJoined({} as Db, {
+      organizationId: 'org_3',
+      member: { id: 'member_3', role: 'operator' },
+    });
+
+    expect(withTenantTransaction).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({ organizationId: 'org_3', memberId: 'member_3' }),
+      expect.any(Function),
+    );
+    expect(grantAccessToSingleSite).toHaveBeenCalledWith(expect.anything(), {
+      organizationId: 'org_3',
+      memberId: 'member_3',
+      role: 'operator',
+    });
+  });
+
+  it('propaga el error si falla el otorgamiento, no lo traga', async () => {
+    vi.mocked(grantAccessToSingleSite).mockRejectedValueOnce(new Error('boom'));
+
+    await expect(
+      handleMemberJoined({} as Db, {
+        organizationId: 'org_4',
+        member: { id: 'member_4', role: 'manager' },
       }),
     ).rejects.toThrow('boom');
   });

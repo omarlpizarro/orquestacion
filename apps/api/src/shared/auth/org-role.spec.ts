@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseSingleOrgRole } from './org-role.js';
+import { hasImplicitAllSitesAccess, ORG_ROLES, parseSingleOrgRole } from './org-role.js';
 
 describe('parseSingleOrgRole', () => {
   it('devuelve el rol tal cual cuando hay uno solo', () => {
@@ -32,5 +32,26 @@ describe('parseSingleOrgRole', () => {
 
   it('el mensaje de un rol corrupto no dice "tu rol no tiene permiso": es un dato inválido, no una autorización que falta', () => {
     expect(() => parseSingleOrgRole('admin')).toThrow(/rol conocido/);
+  });
+});
+
+describe('hasImplicitAllSitesAccess', () => {
+  it('owner y director trabajan en todos los sitios sin filas en member_site_access', () => {
+    expect(hasImplicitAllSitesAccess('owner')).toBe(true);
+    expect(hasImplicitAllSitesAccess('director')).toBe(true);
+  });
+
+  it('manager y operator solo en los sitios donde tienen una fila', () => {
+    expect(hasImplicitAllSitesAccess('manager')).toBe(false);
+    expect(hasImplicitAllSitesAccess('operator')).toBe(false);
+  });
+
+  it('está definida para los cuatro roles conocidos, ninguno queda sin decidir', () => {
+    expect(ORG_ROLES.map((role) => hasImplicitAllSitesAccess(role))).toEqual([
+      true,
+      true,
+      false,
+      false,
+    ]);
   });
 });
