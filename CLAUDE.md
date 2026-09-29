@@ -82,7 +82,7 @@ Ejemplo: @ts-rest/nest (última estable 3.52.1, marzo 2025) declara peer @nestjs
 | Tests | Vitest + Testcontainers | `vitest`/`@vitest/coverage-v8` 4.1.11, `testcontainers`/`@testcontainers/postgresql` 12.1.0 | Postgres real en integración, nunca mocks de base |
 | Fronteras | dependency-cruiser | 18.3.1 | Falla el build si un módulo cruza. `tsPreCompilationDeps: true` es obligatorio o las reglas contra `import type` quedan mudas |
 | Monorepo | Turborepo | 2.11.2 | |
-| Infra | Docker Compose sobre Ubuntu LTS, gestionado con Coolify | — | |
+| Infra | Docker Compose a mano en Ubuntu, ver ADR-014 | — | |
 
 **Versiones:** fijá la versión exacta de cada dependencia al instalarla y anotala
 acá la primera vez. No uses rangos `^` en dependencias de producción.

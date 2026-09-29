@@ -6,6 +6,7 @@ describe('healthOutputSchema', () => {
     const result = healthOutputSchema.safeParse({
       status: 'ok',
       requestId: '01945f4e-0000-7000-8000-000000000000',
+      commit: 'abc1234',
       database: {
         reachable: true,
         connectedAs: 'app_login',
@@ -15,10 +16,20 @@ describe('healthOutputSchema', () => {
     expect(result.success).toBe(true);
   });
 
+  it('rechaza una respuesta sin commit', () => {
+    const result = healthOutputSchema.safeParse({
+      status: 'ok',
+      requestId: '01945f4e-0000-7000-8000-000000000000',
+      database: { reachable: true, connectedAs: 'app_login', serverTimeUtc: 'now' },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it('rechaza un status distinto de ok', () => {
     const result = healthOutputSchema.safeParse({
       status: 'degraded',
       requestId: '01945f4e-0000-7000-8000-000000000000',
+      commit: 'abc1234',
       database: { reachable: true, connectedAs: 'app_login', serverTimeUtc: 'now' },
     });
     expect(result.success).toBe(false);

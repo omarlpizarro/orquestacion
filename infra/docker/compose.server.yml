@@ -1,0 +1,103 @@
+# Despliegue en el server compartido de demo. Ver README, sección "Despliegue".
+#
+# El servidor aloja otros proyectos: todo lo que crea este archivo lleva el
+# prefijo `orquestacion` (proyecto, red, volumen, contenedores) y tiene
+# límites de memoria. No lo levantes a mano: usá `scripts/compose.sh`, que
+# fija el archivo, el env-file y GIT_COMMIT.
+name: orquestacion
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:17-alpine}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: orquestacion
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?Falta POSTGRES_SUPERUSER_PASSWORD en infra/docker/.env}
+      APP_OWNER_PASSWORD: ${APP_OWNER_PASSWORD:?Falta APP_OWNER_PASSWORD en infra/docker/.env}
+      APP_LOGIN_PASSWORD: ${APP_LOGIN_PASSWORD:?Falta APP_LOGIN_PASSWORD en infra/docker/.env}
+    # Sin `ports:` a propósito. Postgres solo es alcanzable desde la red
+    # interna de este proyecto (`orquestacion_default`), nunca desde el host
+    # ni desde la LAN. Para inspeccionar: `scripts/compose.sh exec postgres psql ...`.
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+      - ../../packages/db/sql:/bootstrap-sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d orquestacion"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    mem_limit: 512m
+    memswap_limit: 512m
+    cpus: 1
+    logging: *logging
+
+  api:
+    build:
+      context: ../..
+      dockerfile: infra/docker/api.Dockerfile
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:?GIT_COMMIT lo fija scripts/compose.sh}
+    image: orquestacion-api:${GIT_COMMIT:?GIT_COMMIT lo fija scripts/compose.sh}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      # La aplicación conecta siempre como app_login (regla dura 4).
+      DATABASE_URL: postgres://app_login:${APP_LOGIN_PASSWORD}@postgres:5432/orquestacion
+      DATABASE_APP_ROLE: app_login
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?Falta BETTER_AUTH_SECRET en infra/docker/.env}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:?Falta BETTER_AUTH_URL en infra/docker/.env}
+      NODE_OPTIONS: --max-old-space-size=384
+    ports:
+      - "${API_HOST_PORT:-18020}:3000"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/health').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    mem_limit: 512m
+    memswap_limit: 512m
+    cpus: 1
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    logging: *logging
+
+  # Migraciones: paso explícito del deploy, nunca al arrancar la API (regla de
+  # despliegues separados, CLAUDE.md §6). Es la única pieza que recibe las
+  # credenciales de app_owner; el contenedor de la API no las ve.
+  # `profiles` la deja fuera de `up`: solo corre con `compose run --rm migrate`.
+  migrate:
+    image: orquestacion-api:${GIT_COMMIT:?GIT_COMMIT lo fija scripts/compose.sh}
+    pull_policy: never
+    profiles: [ops]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["node", "/repo/packages/db/dist/migrate.js"]
+    environment:
+      NODE_ENV: production
+      DATABASE_MIGRATION_URL: postgres://app_owner:${APP_OWNER_PASSWORD}@postgres:5432/orquestacion
+    mem_limit: 256m
+    memswap_limit: 256m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    logging: *logging
+
+volumes:
+  postgres_data:

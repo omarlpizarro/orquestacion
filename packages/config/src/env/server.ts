@@ -26,6 +26,10 @@ export const serverEnvSchema = z.object({
   // Base URL pública de la API, para los links que Better Auth genera
   // (verificación de email, callbacks de OAuth).
   BETTER_AUTH_URL: z.url(),
+  // Commit desplegado. `deploy.sh` lo inyecta al construir la imagen; `/health`
+  // lo devuelve para poder verificar qué versión está corriendo de verdad.
+  // En desarrollo local no hay imagen, así que queda en 'unknown'.
+  GIT_COMMIT: z.string().min(1).default('unknown'),
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;

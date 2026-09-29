@@ -17,7 +17,10 @@ function buildHandler(row: Row | undefined, appRole = 'app_login') {
   );
   // Test double: solo necesitamos el método que el handler usa.
   const transactions = { withSystem } as unknown as TransactionService;
-  return new GetHealthHandler(transactions, { DATABASE_APP_ROLE: appRole } as never);
+  return new GetHealthHandler(transactions, {
+    DATABASE_APP_ROLE: appRole,
+    GIT_COMMIT: 'abc1234',
+  } as never);
 }
 
 describe('GetHealthHandler', () => {
@@ -33,6 +36,7 @@ describe('GetHealthHandler', () => {
     expect(result).toEqual({
       status: 'ok',
       requestId: 'req-1',
+      commit: 'abc1234',
       database: {
         reachable: true,
         connectedAs: 'app_login',
