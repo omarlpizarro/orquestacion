@@ -28,27 +28,38 @@ Los `owner` y `director` no necesitan filas: trabajan en todos los sitios
    sitios), pero deja registrado que trabajan en ese sitio y, como la tabla no
    tiene rol (ADR-015), no se pierde si después cambian de rol. La primera versión
    de este slice los rechazaba con un 422; se revirtió porque era una
-   restricción sin un riesgo concreto que la justificara. El otorgamiento
-   automático y el script (punto 6) siguen sin crear filas para ellos: no las
-   necesitan.
+   restricción sin un riesgo concreto que la justificara.
 4. **Es idempotente de dos maneras:** por `client_mutation_id` (`mutation_log`,
    ADR-007) y porque otorgar un acceso que ya existe no es un error.
-5. **Si la organización tiene un solo sitio, un miembro nuevo de nivel 2 o 3
-   recibe acceso automáticamente.** Con un solo sitio no hay nada que elegir; con
-   más de uno no se adivina y decide alguien con autoridad. Se dispara desde
-   los hooks de Better Auth `afterAddMember` **y** `afterAcceptInvitation`: son
-   dos formas de sumar a alguien y ninguna dispara el hook de la otra (verificado
-   en `dist/plugins/organization/routes/` del paquete instalado: `addMember` de
-   servidor → `afterAddMember`; aceptar una invitación crea el miembro con el
-   adaptador y dispara solo `afterAcceptInvitation`).
+5. **Si la organización tiene un solo sitio, todo miembro recibe acceso a él
+   automáticamente, sin excepción por rol** — también el `owner` y el
+   `director`. Con un solo sitio no hay nada que elegir; con más de uno no se
+   adivina y decide alguien con autoridad. `owner` y `director` no necesitan la
+   fila para trabajar (ya lo hacen en todos los sitios), pero la reciben porque
+   la tabla no tiene rol (ADR-015): la fila sobrevive a un cambio de rol, y un
+   `director` que pasa a `manager` conserva su acceso sin que nadie intervenga.
+   La función que lo hace (`grantAccessToSingleSite`) no mira el rol de nadie, así
+   que un rol corrupto tampoco puede dejar a un miembro sin acceso. Se dispara
+   desde tres hooks de Better Auth, porque hay tres momentos en que aparece un
+   miembro y ninguno dispara el hook de otro (verificado en
+   `dist/plugins/organization/routes/` del paquete instalado):
+   - `afterAddMember`: `addMember` de servidor (`crud-members.mjs`).
+   - `afterAcceptInvitation`: aceptar una invitación crea el miembro con el
+     adaptador y dispara solo este (`crud-invites.mjs`).
+   - `afterCreateOrganization`: para **el dueño al crear la organización**. Ahí
+     `afterAddMember` también corre, pero *antes* de que exista el sitio por
+     defecto: Better Auth ejecuta `createMember` → `afterAddMember` → … →
+     `afterCreateOrganization` (`crud-org.mjs`, líneas 100, 101 y 137), y el sitio
+     lo crea el último. Con solo `afterAddMember`, el dueño se quedaba sin fila
+     (probado: sin la llamada en `afterCreateOrganization` falla el test).
 6. **El script operativo `ensure-default-sites` asegura la misma invariante**, para
    todos los miembros existentes: en toda organización de un solo sitio, todo
-   miembro de nivel 2 o 3 tiene acceso a él. Usa la misma función que el hook
-   (`grantAccessToSingleSite`), así que es a la vez el backfill de los miembros que
-   ya existían cuando se introdujo el alcance por sitio y la reparación de un
-   otorgamiento automático fallido. Con eso el script asegura dos invariantes:
-   toda organización tiene su sitio (ADR-013) y, en las de un solo sitio, todo
-   miembro de nivel 2 o 3 tiene acceso.
+   miembro tiene acceso a él, sin excepción por rol. Usa la misma función que los
+   hooks (`grantAccessToSingleSite`), así que es a la vez el backfill de los
+   miembros que ya existían cuando se introdujo el alcance por sitio (incluidos
+   los dueños) y la reparación de un otorgamiento automático fallido. Con eso el
+   script asegura dos invariantes: toda organización tiene su sitio (ADR-013) y,
+   en las de un solo sitio, todo miembro tiene acceso.
 
 ## Si el hook falla
 
@@ -74,11 +85,10 @@ Qué pasa entonces si el otorgamiento automático lanza:
    idempotentes: correr `ensure-default-sites` (punto 6), que lo encuentra y lo
    corrige junto con cualquier otro caso, o que un `owner`/`director` lo otorgue
    con `grant-site-access`.
-4. **Un rol que no se puede interpretar** (desconocido, vacío, o varios roles
-   distintos) no otorga nada y deja un error en el log, sin lanzar: el miembro ya
-   existe y no hay nada que revertir. Ese caso no se repara solo, porque volver a
-   correr el script no cambia el rol: hay que corregir el dato. Cada corrida
-   vuelve a loguearlo, que es lo que lo mantiene a la vista.
+
+Como el otorgamiento no interpreta el rol, ya no hay un caso de "rol ilegible" que
+quede sin otorgar ni que haya que loguear aparte: cualquier miembro de una
+organización de un solo sitio recibe su fila.
 
 El otorgamiento automático y el endpoint comparten un único `INSERT`
 (`shared/auth/member-site-access.ts`), en `shared/` por el mismo motivo que
@@ -86,10 +96,10 @@ El otorgamiento automático y el endpoint comparten un único `INSERT`
 
 ## Lo que este ADR no resuelve (a propósito)
 
-- **Cambio de rol.** Un `director` degradado a `manager` en una organización de un
-  solo sitio no recibe acceso automático (no se cablea `afterUpdateMemberRole`),
-  salvo que ya tuviera una fila. Lo repara correr `ensure-default-sites`, o
-  otorgárselo. Queda anotado para el PR de alcance.
+- **Una organización que pasa de uno a más sitios.** Los miembros que ya tenían la
+  fila conservan el acceso al primero, y los miembros nuevos no reciben ninguno
+  automáticamente (con más de un sitio no se adivina). Es lo esperado: alguien
+  con autoridad decide a qué sitios va cada uno.
 - **Revocar acceso** y **quitar a un miembro de la organización** no borran filas
   de `member_site_access` (sin FK a `auth.member`, ADR-010): quedan filas de
   miembros que ya no existen. No dan acceso a nada, pero conviene limpiarlas

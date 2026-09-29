@@ -220,20 +220,50 @@ describe('ensureDefaultSitesForAllOrganizations (integración)', () => {
       expect(await accessRows(org.organizationId, ownerMemberId, operator.memberId)).toEqual([]);
     });
 
-    it('owner y director no reciben fila: ya trabajan en todos los sitios', async () => {
+    it('todos los miembros reciben fila, sin excepción por rol: repara también al dueño y a un director de una organización que ya existía', async () => {
       const org = await signUpAndCreateOrg(app, 'Acceso Nivel Uno');
       const ownerMemberId = await ownerOf(org.cookie);
+      const onlySite = await getDefaultSiteId(db, {
+        organizationId: org.organizationId,
+        memberId: ownerMemberId,
+      });
       const director = await addMemberWithRole(app, auth, {
         organizationId: org.organizationId,
         role: 'director',
-        label: 'Director Sin Fila',
+        label: 'Director Con Fila',
       });
+      // Los hooks ya les dieron fila a los dos.
+      expect(await accessRows(org.organizationId, ownerMemberId, ownerMemberId)).toEqual([
+        onlySite,
+      ]);
+      expect(await accessRows(org.organizationId, ownerMemberId, director.memberId)).toEqual([
+        onlySite,
+      ]);
 
-      const run = await ensureDefaultSitesForAllOrganizations(db);
+      // Simula una organización anterior a ADR-016 (o un otorgamiento que
+      // falló): los dos sin fila.
+      await withTenantTransaction(
+        db,
+        { organizationId: org.organizationId, memberId: ownerMemberId, requestId: newId() },
+        (tx) =>
+          tx.execute(sql`
+            delete from member_site_access
+            where member_id in (${ownerMemberId}, ${director.memberId})
+          `),
+      );
 
-      expect(run.failed).toEqual([]);
-      expect(await accessRows(org.organizationId, ownerMemberId, director.memberId)).toEqual([]);
-      expect(await accessRows(org.organizationId, ownerMemberId, ownerMemberId)).toEqual([]);
+      const firstRun = await ensureDefaultSitesForAllOrganizations(db);
+      expect(firstRun.failed).toEqual([]);
+      expect(firstRun.memberAccessGranted).toBeGreaterThanOrEqual(2);
+      expect(await accessRows(org.organizationId, ownerMemberId, ownerMemberId)).toEqual([
+        onlySite,
+      ]);
+      expect(await accessRows(org.organizationId, ownerMemberId, director.memberId)).toEqual([
+        onlySite,
+      ]);
+
+      const secondRun = await ensureDefaultSitesForAllOrganizations(db);
+      expect(secondRun.memberAccessGranted).toBe(0);
     });
   });
 });

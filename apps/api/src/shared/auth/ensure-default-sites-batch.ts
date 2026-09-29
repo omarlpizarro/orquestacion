@@ -46,18 +46,18 @@ export interface EnsureDefaultSitesBatchResult {
  *    código en vez de borrarlo: el paso 1 sigue siendo útil por sí solo y
  *    quitar esta parte no cambia ningún comportamiento. Tampoco tiene test
  *    dedicado, ni lo va a tener: la precondición no se puede construir.
- * 3. En una organización con exactamente un sitio, da acceso a ese sitio a todo
- *    miembro de nivel 2 o 3 que todavía no lo tenga (ADR-016). Es la misma
- *    operación que el hook de Better Auth hace al sumar un miembro
- *    (`grantAccessToSingleSite`, una sola implementación), así que sirve de las
- *    dos cosas: backfill de los miembros que ya existían cuando se introdujo el
- *    alcance por sitio, y reparación de un miembro cuyo otorgamiento automático
- *    falló (el hook no puede evitar que el miembro exista si falla). Con más de
- *    un sitio no adivina: eso lo decide quien otorga. `owner`/`director` no
- *    necesitan fila.
+ * 3. En una organización con exactamente un sitio, da acceso a ese sitio a
+ *    todo miembro que todavía no lo tenga, sin excepción por rol (ADR-016).
+ *    Es la misma operación que los hooks de Better Auth hacen al crear la
+ *    organización y al sumar un miembro (`grantAccessToSingleSite`, una sola
+ *    implementación), así que sirve de las dos cosas: backfill de los miembros
+ *    que ya existían cuando se introdujo el alcance por sitio, y reparación de
+ *    un miembro cuyo otorgamiento automático falló (el hook no puede evitar que
+ *    el miembro exista si falla). Con más de un sitio no adivina: eso lo decide
+ *    quien otorga.
  *
  * Asegura entonces dos invariantes: toda organización tiene su sitio, y en las
- * de un solo sitio todo miembro de nivel 2 o 3 tiene acceso a él.
+ * de un solo sitio todo miembro tiene acceso a él.
  *
  * Corre con las credenciales de `app_login`, igual que la aplicación —
  * nunca con las de `app_owner` (regla dura 4): esto no es una migración de
@@ -136,15 +136,14 @@ export async function ensureDefaultSitesForAllOrganizations(
           // sitios de la organización, y el recién creado tiene que estar.
           // `auth.member` no tiene RLS (ADR-011): el filtro por organización
           // es lo único que acota esta lectura.
-          const members = await tx.execute<{ id: string; role: string }>(sql`
-            select id, role from auth.member where organization_id = ${organizationId}
+          const members = await tx.execute<{ id: string }>(sql`
+            select id from auth.member where organization_id = ${organizationId}
           `);
           let accessGranted = 0;
           for (const member of members.rows) {
             const granted = await grantAccessToSingleSite(tx, {
               organizationId,
               memberId: member.id,
-              role: member.role,
             });
             if (granted) accessGranted += 1;
           }

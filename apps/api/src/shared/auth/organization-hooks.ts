@@ -50,7 +50,21 @@ export async function handleOrganizationCreated(
   await withTenantTransaction(
     db,
     { organizationId: data.organization.id, memberId: data.member.id, requestId: newId() },
-    (tx) => ensureDefaultSite(tx, { organizationId: data.organization.id }),
+    async (tx) => {
+      await ensureDefaultSite(tx, { organizationId: data.organization.id });
+
+      // ADR-016: el dueño también recibe su fila, y tiene que ser acá y no en
+      // `afterAddMember`. Al crear una organización Better Auth ejecuta, en
+      // este orden, `createMember` → `afterAddMember` → … → `afterCreateOrganization`
+      // (verificado en `dist/plugins/organization/routes/crud-org.mjs`, líneas
+      // 100, 101 y 137): cuando `afterAddMember` corre para el dueño, el sitio por
+      // defecto todavía no existe, así que `grantAccessToSingleSite` no ve ninguno
+      // y no otorga nada. Acá el sitio ya está.
+      await grantAccessToSingleSite(tx, {
+        organizationId: data.organization.id,
+        memberId: data.member.id,
+      });
+    },
   );
 }
 
@@ -74,7 +88,7 @@ export async function handleOrganizationCreated(
  */
 export async function handleMemberJoined(
   db: Db,
-  data: { organizationId: string; member: { id: string; role: string } },
+  data: { organizationId: string; member: { id: string } },
 ): Promise<void> {
   await withTenantTransaction(
     db,
@@ -83,7 +97,6 @@ export async function handleMemberJoined(
       grantAccessToSingleSite(tx, {
         organizationId: data.organizationId,
         memberId: data.member.id,
-        role: data.member.role,
       }),
   );
 }

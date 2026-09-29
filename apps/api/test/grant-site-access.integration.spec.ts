@@ -328,9 +328,13 @@ describe('POST /tenancy/sites/:site_id/access (integración)', () => {
       },
     );
 
-    it('owner y director no reciben fila: ya trabajan en todos los sitios', async () => {
+    it('todos los miembros reciben fila, sin excepción por rol: también el dueño al crear la organización y un director', async () => {
       const org = await signUpAndCreateOrg(app, 'Un Solo Sitio Nivel 1');
       const orgOwner = await memberIdOf(org.cookie);
+      const onlySite = await getDefaultSiteId(db, {
+        organizationId: org.organizationId,
+        memberId: orgOwner,
+      });
 
       const director = await addMemberWithRole(app, auth, {
         organizationId: org.organizationId,
@@ -338,10 +342,54 @@ describe('POST /tenancy/sites/:site_id/access (integración)', () => {
         label: 'Auto Director',
       });
 
-      expect(await accessRows(org.organizationId, orgOwner, director.memberId)).toEqual([]);
-      // El propio owner que creó la organización (afterAddMember corre también
-      // en ese alta) tampoco recibe fila.
-      expect(await accessRows(org.organizationId, orgOwner, orgOwner)).toEqual([]);
+      expect(await accessRows(org.organizationId, orgOwner, director.memberId)).toEqual([
+        { member_id: director.memberId, site_id: onlySite },
+      ]);
+      // El dueño recibe su fila desde afterCreateOrganization: su afterAddMember
+      // corre antes de que exista el sitio por defecto (crud-org.mjs), así que
+      // sin ese segundo camino se quedaría sin fila.
+      expect(await accessRows(org.organizationId, orgOwner, orgOwner)).toEqual([
+        { member_id: orgOwner, site_id: onlySite },
+      ]);
+    });
+
+    it('un director que pasa a manager conserva su acceso al único sitio, sin que nadie intervenga', async () => {
+      const org = await signUpAndCreateOrg(app, 'Cambio De Rol');
+      const orgOwner = await memberIdOf(org.cookie);
+      const onlySite = await getDefaultSiteId(db, {
+        organizationId: org.organizationId,
+        memberId: orgOwner,
+      });
+      const director = await addMemberWithRole(app, auth, {
+        organizationId: org.organizationId,
+        role: 'director',
+        label: 'Director Degradado',
+      });
+
+      const update = await app
+        .getHttpAdapter()
+        .getInstance()
+        .inject({
+          method: 'POST',
+          url: '/api/auth/organization/update-member-role',
+          headers: { cookie: org.cookie },
+          payload: {
+            memberId: director.memberId,
+            role: 'manager',
+            organizationId: org.organizationId,
+          },
+        });
+      expect(update.statusCode, update.body).toBe(200);
+
+      const role = await inOrganization(org.organizationId, orgOwner, (tx) =>
+        tx.execute<{ role: string }>(sql`
+          select role from auth.member where id = ${director.memberId}
+        `),
+      );
+      expect(role.rows[0]?.role).toBe('manager');
+      expect(await accessRows(org.organizationId, orgOwner, director.memberId)).toEqual([
+        { member_id: director.memberId, site_id: onlySite },
+      ]);
     });
 
     it('con más de un sitio no adivina: el miembro nuevo queda sin acceso hasta que alguien lo otorgue', async () => {
