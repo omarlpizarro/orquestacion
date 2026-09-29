@@ -477,8 +477,11 @@ El merge lo hace Omar.
 
 - Podés: leer logs, ver el estado de los contenedores (`ps`, `inspect`),
   consultar `/health` y hacer consultas de solo lectura a la base para
-  diagnosticar (`SELECT`, nunca escrituras).
-- No podés: correr `deploy.sh` ni migraciones, levantar, bajar o reiniciar
+  diagnosticar (`SELECT`, nunca escrituras). Para diagnosticar, abrí `psql` con
+  `PGOPTIONS='-c default_transaction_read_only=on'`: así la regla de solo lectura
+  la hace cumplir Postgres, no tu cuidado.
+- No podés: correr `deploy.sh`, migraciones ni la prueba de humo
+  (`scripts/smoke-test.sh`, que escribe en la base), levantar, bajar o reiniciar
   contenedores, editar archivos, tocar el `.env`, hacer operaciones de git en el
   clon del servidor, instalar paquetes, ni ningún cambio a nivel sistema.
 - Si hace falta alguna de esas acciones, pedila con el comando exacto y la
