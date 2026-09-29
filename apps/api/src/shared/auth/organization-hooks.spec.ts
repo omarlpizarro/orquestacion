@@ -30,6 +30,29 @@ describe('handleOrganizationCreated', () => {
     });
   });
 
+  // ADR-016: al crear una organización, Better Auth ejecuta afterAddMember
+  // ANTES que afterCreateOrganization, así que cuando corre para el dueño el
+  // sitio todavía no existe. La fila del dueño se otorga acá, y solo tiene
+  // sentido si el sitio ya está.
+  it('le otorga acceso al dueño recién creado, después de asegurar el sitio', async () => {
+    vi.mocked(ensureDefaultSite).mockClear();
+    vi.mocked(grantAccessToSingleSite).mockClear();
+
+    await handleOrganizationCreated({} as Db, {
+      organization: { id: 'org_5' },
+      member: { id: 'member_5' },
+    });
+
+    expect(grantAccessToSingleSite).toHaveBeenCalledWith(expect.anything(), {
+      organizationId: 'org_5',
+      memberId: 'member_5',
+    });
+    const siteOrder = vi.mocked(ensureDefaultSite).mock.invocationCallOrder[0] ?? 0;
+    const grantOrder = vi.mocked(grantAccessToSingleSite).mock.invocationCallOrder[0] ?? 0;
+    expect(siteOrder).toBeGreaterThan(0);
+    expect(grantOrder).toBeGreaterThan(siteOrder);
+  });
+
   // ADR-013: verificado contra el paquete instalado de better-auth que la
   // organización y el member ya están confirmados en la base cuando este
   // hook corre, así que no hay nada que este hook pueda revertir si falla.
@@ -52,10 +75,10 @@ describe('handleOrganizationCreated', () => {
 });
 
 describe('handleMemberJoined', () => {
-  it('abre una transacción de tenant con el miembro nuevo y le pasa su rol a grantAccessToSingleSite', async () => {
+  it('abre una transacción de tenant con el miembro nuevo y llama a grantAccessToSingleSite', async () => {
     await handleMemberJoined({} as Db, {
       organizationId: 'org_3',
-      member: { id: 'member_3', role: 'operator' },
+      member: { id: 'member_3' },
     });
 
     expect(withTenantTransaction).toHaveBeenCalledWith(
@@ -66,7 +89,6 @@ describe('handleMemberJoined', () => {
     expect(grantAccessToSingleSite).toHaveBeenCalledWith(expect.anything(), {
       organizationId: 'org_3',
       memberId: 'member_3',
-      role: 'operator',
     });
   });
 
@@ -76,7 +98,7 @@ describe('handleMemberJoined', () => {
     await expect(
       handleMemberJoined({} as Db, {
         organizationId: 'org_4',
-        member: { id: 'member_4', role: 'manager' },
+        member: { id: 'member_4' },
       }),
     ).rejects.toThrow('boom');
   });

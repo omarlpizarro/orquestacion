@@ -20,8 +20,8 @@ export type GrantSiteAccessOutput = z.infer<typeof grantSiteAccessOutputSchema>;
 
 /**
  * Sin `.errors()` propio: los casos de este slice (rol sin permiso, sitio
- * inexistente, miembro que no es de la organización, miembro con acceso
- * implícito a todos los sitios) son FORBIDDEN/NOT_FOUND/UNPROCESSABLE_CONTENT,
+ * inexistente, miembro que no es de la organización) son
+ * FORBIDDEN/NOT_FOUND/UNPROCESSABLE_CONTENT,
  * ya declarados en `base`; `domain_code` los distingue entre sí
  * (CLAUDE.md §8).
  *

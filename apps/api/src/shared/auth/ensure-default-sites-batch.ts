@@ -3,17 +3,19 @@ import type { Db } from '@orq/db';
 import { withSystemTransaction, withTenantTransaction } from '@orq/db';
 import { sql } from 'drizzle-orm';
 import { ensureDefaultSite } from './ensure-default-site.js';
+import { grantAccessToSingleSite } from './member-site-access.js';
 
 export interface EnsureDefaultSitesBatchResult {
   organizationsReviewed: number;
   sitesCreated: number;
   projectsBackfilled: number;
+  memberAccessGranted: number;
   failed: ReadonlyArray<{ organizationId: string; error: unknown }>;
 }
 
 /**
- * ADR-013 (`docs/adr/013-project-site-id-obligatorio.md`). Dos trabajos,
- * ambos idempotentes — seguro de correr más de una vez, incluso repetido
+ * ADR-013 (`docs/adr/013-project-site-id-obligatorio.md`) y ADR-016. Tres
+ * trabajos, todos idempotentes — seguro de correr más de una vez, incluso repetido
  * sobre la misma organización:
  *
  * 1. Crea el sitio por defecto de toda organización que todavía no tenga
@@ -44,6 +46,18 @@ export interface EnsureDefaultSitesBatchResult {
  *    código en vez de borrarlo: el paso 1 sigue siendo útil por sí solo y
  *    quitar esta parte no cambia ningún comportamiento. Tampoco tiene test
  *    dedicado, ni lo va a tener: la precondición no se puede construir.
+ * 3. En una organización con exactamente un sitio, da acceso a ese sitio a
+ *    todo miembro que todavía no lo tenga, sin excepción por rol (ADR-016).
+ *    Es la misma operación que los hooks de Better Auth hacen al crear la
+ *    organización y al sumar un miembro (`grantAccessToSingleSite`, una sola
+ *    implementación), así que sirve de las dos cosas: backfill de los miembros
+ *    que ya existían cuando se introdujo el alcance por sitio, y reparación de
+ *    un miembro cuyo otorgamiento automático falló (el hook no puede evitar que
+ *    el miembro exista si falla). Con más de un sitio no adivina: eso lo decide
+ *    quien otorga.
+ *
+ * Asegura entonces dos invariantes: toda organización tiene su sitio, y en las
+ * de un solo sitio todo miembro tiene acceso a él.
  *
  * Corre con las credenciales de `app_login`, igual que la aplicación —
  * nunca con las de `app_owner` (regla dura 4): esto no es una migración de
@@ -66,6 +80,7 @@ export async function ensureDefaultSitesForAllOrganizations(
 ): Promise<EnsureDefaultSitesBatchResult> {
   let sitesCreated = 0;
   let projectsBackfilled = 0;
+  let memberAccessGranted = 0;
   const failed: Array<{ organizationId: string; error: unknown }> = [];
 
   const organizations = await withSystemTransaction(db, { requestId: newId() }, (tx) =>
@@ -91,7 +106,10 @@ export async function ensureDefaultSitesForAllOrganizations(
         continue;
       }
 
-      await withTenantTransaction(
+      // Los contadores se suman recién cuando la transacción de esta
+      // organización confirmó: si algo falla más adelante y hace rollback, no
+      // hay que contar como hecho lo que se deshizo.
+      const done = await withTenantTransaction(
         db,
         { organizationId, memberId, requestId: newId() },
         async (tx) => {
@@ -99,7 +117,6 @@ export async function ensureDefaultSitesForAllOrganizations(
             select id from site where organization_id = ${organizationId} limit 1
           `);
           await ensureDefaultSite(tx, { organizationId });
-          if (!before.rows[0]) sitesCreated += 1;
 
           // Sin uso desde 0010 (`site_id` NOT NULL): no puede haber filas que
           // coincidan. Ver el comentario del punto 2 arriba.
@@ -114,9 +131,33 @@ export async function ensureDefaultSitesForAllOrganizations(
             where organization_id = ${organizationId} and site_id is null
             returning id
           `);
-          projectsBackfilled += backfilled.rows.length;
+
+          // Después de asegurar el sitio: `grantAccessToSingleSite` cuenta los
+          // sitios de la organización, y el recién creado tiene que estar.
+          // `auth.member` no tiene RLS (ADR-011): el filtro por organización
+          // es lo único que acota esta lectura.
+          const members = await tx.execute<{ id: string }>(sql`
+            select id from auth.member where organization_id = ${organizationId}
+          `);
+          let accessGranted = 0;
+          for (const member of members.rows) {
+            const granted = await grantAccessToSingleSite(tx, {
+              organizationId,
+              memberId: member.id,
+            });
+            if (granted) accessGranted += 1;
+          }
+
+          return {
+            siteCreated: !before.rows[0],
+            projectsBackfilled: backfilled.rows.length,
+            accessGranted,
+          };
         },
       );
+      if (done.siteCreated) sitesCreated += 1;
+      projectsBackfilled += done.projectsBackfilled;
+      memberAccessGranted += done.accessGranted;
     } catch (error) {
       failed.push({ organizationId, error });
     }
@@ -126,6 +167,7 @@ export async function ensureDefaultSitesForAllOrganizations(
     organizationsReviewed: organizations.rows.length,
     sitesCreated,
     projectsBackfilled,
+    memberAccessGranted,
     failed,
   };
 }

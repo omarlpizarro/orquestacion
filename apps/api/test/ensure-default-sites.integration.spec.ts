@@ -12,6 +12,8 @@ import { ensureDefaultSitesForAllOrganizations } from '../src/shared/auth/ensure
 import { mountBetterAuth } from '../src/shared/auth/mount-better-auth.js';
 import { DB } from '../src/shared/database/database.tokens.js';
 import { resolveTenantIdentity } from '../src/shared/request-context/request-context.middleware.js';
+import { addMemberWithRole } from './helpers/add-member-with-role.js';
+import { getDefaultSiteId } from './helpers/get-default-site-id.js';
 import { signUpAndCreateOrg } from './helpers/sign-up-and-create-org.js';
 
 /**
@@ -132,5 +134,136 @@ describe('ensureDefaultSitesForAllOrganizations (integración)', () => {
     expect(secondRun.failed).toEqual([]);
     expect(secondRun.sitesCreated).toBe(0);
     expect((await sitesOf(org.organizationId, tenant.memberId)).rows).toHaveLength(1);
+  });
+
+  describe('acceso a sitios en organizaciones de un solo sitio (ADR-016)', () => {
+    async function accessRows(organizationId: string, actingMemberId: string, memberId: string) {
+      const result = await withTenantTransaction(
+        db,
+        { organizationId, memberId: actingMemberId, requestId: newId() },
+        (tx) =>
+          tx.execute<{ site_id: string }>(sql`
+            select site_id from member_site_access where member_id = ${memberId}
+          `),
+      );
+      return result.rows.map((row) => row.site_id);
+    }
+
+    async function ownerOf(cookie: string): Promise<string> {
+      const tenant = await resolveTenantIdentity(auth, { cookie });
+      if (!tenant) throw new Error('esperaba tenant resuelto');
+      return tenant.memberId;
+    }
+
+    it('repara el acceso de un miembro que lo perdió, y correrlo otra vez no otorga nada más', async () => {
+      const org = await signUpAndCreateOrg(app, 'Acceso Reparacion');
+      const ownerMemberId = await ownerOf(org.cookie);
+      const onlySite = await getDefaultSiteId(db, {
+        organizationId: org.organizationId,
+        memberId: ownerMemberId,
+      });
+      const manager = await addMemberWithRole(app, auth, {
+        organizationId: org.organizationId,
+        role: 'manager',
+        label: 'Gerente Reparacion',
+      });
+      expect(await accessRows(org.organizationId, ownerMemberId, manager.memberId)).toEqual([
+        onlySite,
+      ]);
+
+      // Simula el caso que ADR-016 documenta como no evitable por el hook: el
+      // miembro existe pero su otorgamiento automático falló.
+      await withTenantTransaction(
+        db,
+        { organizationId: org.organizationId, memberId: ownerMemberId, requestId: newId() },
+        (tx) =>
+          tx.execute(sql`delete from member_site_access where member_id = ${manager.memberId}`),
+      );
+      expect(await accessRows(org.organizationId, ownerMemberId, manager.memberId)).toEqual([]);
+
+      const firstRun = await ensureDefaultSitesForAllOrganizations(db);
+      expect(firstRun.failed).toEqual([]);
+      expect(firstRun.memberAccessGranted).toBeGreaterThanOrEqual(1);
+      expect(await accessRows(org.organizationId, ownerMemberId, manager.memberId)).toEqual([
+        onlySite,
+      ]);
+
+      const secondRun = await ensureDefaultSitesForAllOrganizations(db);
+      expect(secondRun.failed).toEqual([]);
+      expect(secondRun.memberAccessGranted).toBe(0);
+      expect(await accessRows(org.organizationId, ownerMemberId, manager.memberId)).toEqual([
+        onlySite,
+      ]);
+    });
+
+    it('con más de un sitio no adivina: el miembro sin acceso sigue sin acceso', async () => {
+      const org = await signUpAndCreateOrg(app, 'Acceso Dos Sitios');
+      const ownerMemberId = await ownerOf(org.cookie);
+      await withTenantTransaction(
+        db,
+        { organizationId: org.organizationId, memberId: ownerMemberId, requestId: newId() },
+        (tx) =>
+          tx.execute(sql`
+            insert into site (id, organization_id, name, timezone, is_active)
+            values (${newId()}, ${org.organizationId}, 'Segundo sitio', 'America/Argentina/Buenos_Aires', true)
+          `),
+      );
+      const operator = await addMemberWithRole(app, auth, {
+        organizationId: org.organizationId,
+        role: 'operator',
+        label: 'Operario Sin Elegir',
+      });
+
+      const run = await ensureDefaultSitesForAllOrganizations(db);
+
+      expect(run.failed).toEqual([]);
+      expect(await accessRows(org.organizationId, ownerMemberId, operator.memberId)).toEqual([]);
+    });
+
+    it('todos los miembros reciben fila, sin excepción por rol: repara también al dueño y a un director de una organización que ya existía', async () => {
+      const org = await signUpAndCreateOrg(app, 'Acceso Nivel Uno');
+      const ownerMemberId = await ownerOf(org.cookie);
+      const onlySite = await getDefaultSiteId(db, {
+        organizationId: org.organizationId,
+        memberId: ownerMemberId,
+      });
+      const director = await addMemberWithRole(app, auth, {
+        organizationId: org.organizationId,
+        role: 'director',
+        label: 'Director Con Fila',
+      });
+      // Los hooks ya les dieron fila a los dos.
+      expect(await accessRows(org.organizationId, ownerMemberId, ownerMemberId)).toEqual([
+        onlySite,
+      ]);
+      expect(await accessRows(org.organizationId, ownerMemberId, director.memberId)).toEqual([
+        onlySite,
+      ]);
+
+      // Simula una organización anterior a ADR-016 (o un otorgamiento que
+      // falló): los dos sin fila.
+      await withTenantTransaction(
+        db,
+        { organizationId: org.organizationId, memberId: ownerMemberId, requestId: newId() },
+        (tx) =>
+          tx.execute(sql`
+            delete from member_site_access
+            where member_id in (${ownerMemberId}, ${director.memberId})
+          `),
+      );
+
+      const firstRun = await ensureDefaultSitesForAllOrganizations(db);
+      expect(firstRun.failed).toEqual([]);
+      expect(firstRun.memberAccessGranted).toBeGreaterThanOrEqual(2);
+      expect(await accessRows(org.organizationId, ownerMemberId, ownerMemberId)).toEqual([
+        onlySite,
+      ]);
+      expect(await accessRows(org.organizationId, ownerMemberId, director.memberId)).toEqual([
+        onlySite,
+      ]);
+
+      const secondRun = await ensureDefaultSitesForAllOrganizations(db);
+      expect(secondRun.memberAccessGranted).toBe(0);
+    });
   });
 });
