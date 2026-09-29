@@ -4,6 +4,7 @@ import { base } from '../shared/base.contract.js';
 export const healthOutputSchema = z.object({
   status: z.literal('ok'),
   requestId: z.string(),
+  commit: z.string(),
   database: z.object({
     reachable: z.literal(true),
     connectedAs: z.string(),

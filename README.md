@@ -34,7 +34,8 @@ packages/
   db/         esquema Drizzle, migraciones, arnés de tests con Testcontainers
   config/     tsconfig, Biome, validación de variables de entorno
 infra/
-  docker/     compose de desarrollo, bootstrap de roles de Postgres
+  docker/     compose de desarrollo y del server, Dockerfile de la API, bootstrap de roles de Postgres
+scripts/      deploy, prueba de humo y utilidades
 docs/
 ```
 
@@ -70,13 +71,131 @@ pnpm test:integration
 socket que Testcontainers monta para su contenedor de limpieza (Ryuk) y la
 rompe.
 
+## Despliegue en el server de demo
+
+API + Postgres en Docker Compose, sobre el servidor Ubuntu compartido. Todo
+lo que se crea lleva el prefijo `orquestacion` (proyecto de Compose, red,
+volumen, contenedores) y tiene límite de memoria: en ese server corren otros
+proyectos que no hay que tocar. `web`, `worker` y MinIO no se despliegan
+todavía (ver `docs/phase-2-brief.md`).
+
+| Pieza | Dónde |
+| --- | --- |
+| Imagen de la API (también corre migraciones y scripts) | `infra/docker/api.Dockerfile` |
+| Compose del server | `infra/docker/compose.server.yml` |
+| Variables del server | `infra/docker/.env` (no versionado; plantilla en `server.env.example`) |
+| Deploy | `scripts/deploy.sh` |
+| Compose con todo ya fijado | `scripts/compose.sh` |
+| Prueba de humo | `scripts/smoke-test.sh` |
+
+### Primera vez
+
+En el server (`ssh lomaro@192.168.0.105`), dentro del clon del repo:
+
+```bash
+git clone https://github.com/omarlpizarro/orquestacion.git ~/orquestacion
+cd ~/orquestacion
+cp infra/docker/server.env.example infra/docker/.env
+# Reemplazá cada CHANGE_ME por `openssl rand -hex 24`.
+$EDITOR infra/docker/.env
+scripts/deploy.sh
+```
+
+Los roles de Postgres (`app_owner`, `app_login`) se crean una sola vez, al
+inicializar el volumen, con los passwords que haya en `.env` en ese momento.
+Cambiar un password después en `.env` no cambia el de la base: hay que
+cambiarlo con `ALTER ROLE` o recrear el volumen.
+
+### Cada deploy
+
+```bash
+cd ~/orquestacion
+scripts/deploy.sh
+```
+
+Hace, en este orden y cortando en el primer error:
+
+1. `git pull --ff-only`.
+2. Build de la imagen, etiquetada con el commit.
+3. Postgres arriba (prerrequisito de migrar, no un reinicio).
+4. **Migraciones** como paso explícito, en un contenedor efímero con las
+   credenciales de `app_owner`. La API nunca las recibe ni migra al arrancar
+   (regla de despliegues separados, `CLAUDE.md` sección 6).
+5. Reinicio de la API y espera a que quede `healthy`.
+
+Al final compara el commit que devuelve `/health` con el desplegado. Si una
+migración falla, la API vieja sigue corriendo. `scripts/deploy.sh --no-pull`
+despliega lo que ya está checkouteado. Se niega a correr con el árbol sucio o
+con algún `CHANGE_ME` en `.env`, y si el puerto de la API lo usa otro proceso.
+
+Las migraciones no se revierten: volver a un commit anterior no deshace el
+esquema. Las que tienen `NOT VALID`/`VALIDATE` van en despliegues separados
+(`CLAUDE.md` sección 6): no agrupes las dos en un mismo `deploy.sh`.
+
+### Puertos y aislamiento
+
+- La API se publica en el puerto `API_HOST_PORT` (por defecto `18020`).
+  Verificado libre el 2026-09-29; ocupados por otros proyectos: 22, 1433,
+  3000, 5432, 6333, 6334, 6379, 8000, 8080, 18000 y 18010.
+- **Postgres no publica ningún puerto.** Solo es alcanzable desde la red
+  interna de Compose. Para entrar: `scripts/compose.sh exec postgres psql -U postgres -d orquestacion`.
+- Límites: 512 MB la API y Postgres, 256 MB las migraciones. Logs rotados
+  (3 archivos de 10 MB).
+
+### Correr un script operativo
+
+Los scripts se corren en un contenedor efímero de la misma imagen, con el
+mismo entorno y límites que la API, sin publicar puertos:
+
+```bash
+scripts/compose.sh run --rm --no-deps api node dist/src/scripts/ensure-default-sites.js
+```
+
+Es el mecanismo para cualquier script operativo futuro: el JS compilado vive
+en `apps/api/dist/src/scripts/`, y se ejecuta con `node` desde el directorio de
+trabajo de la imagen (`/repo/apps/api`). Corren como `app_login`, nunca como
+`app_owner`.
+
+### Cookies y TLS
+
+Better Auth decide el atributo `Secure` de las cookies de sesión así
+(`better-auth@1.7.5`, `dist/cookies/index.mjs:23`): si la opción
+`advanced.useSecureCookies` está definida, manda esa; si no, y `baseURL` es un
+string (nuestro caso, viene de `BETTER_AUTH_URL`), es `Secure` si y solo si
+`BETTER_AUTH_URL` empieza con `https://`. `NODE_ENV=production` **no** cambia
+eso: solo cuenta cuando no hay `baseURL`, y acá siempre lo hay.
+
+Consecuencia: con `BETTER_AUTH_URL=http://192.168.0.105:18020` las cookies salen
+sin `Secure` y la sesión persiste sin TLS. Con `https://` salen con `Secure` (y
+con el prefijo `__Secure-`), y desde ese momento **exigen TLS de punta a
+punta**: si la API quedara detrás de un proxy que termina TLS, la URL pública
+tiene que seguir siendo `https://`. El error inverso —`https://` en la variable
+pero acceso por http— es el que hace que el login parezca andar y la sesión no
+persista. La prueba de humo lo detecta (paso 3).
+
+Por eso esta pasada **no necesita TLS**: se prueba con `http://` y es seguro
+mientras el server esté en la LAN. Se necesita TLS antes de exponerlo fuera de
+la red interna o de usar un navegador contra un dominio real.
+
+### Prueba de humo
+
+```bash
+scripts/smoke-test.sh
+```
+
+Verifica: `/health` (conecta como `app_login`, devuelve el commit desplegado),
+Postgres sin puerto publicado, alta de usuario con cookies coherentes con el
+esquema de `BETTER_AUTH_URL` y sesión que persiste, alta de organización con
+sitio por defecto (ADR-013) y `ensure-default-sites` corriendo dentro del
+contenedor. Deja un usuario y una organización `smoke-*` en la base de demo.
+
 ## Flujo de trabajo
 
 1. Rama por tarea desde `main`.
 2. Pull request con `pnpm check && pnpm test` en verde (CI corre además
    `pnpm test:integration` y una verificación completa en Windows).
 3. Merge a `main`.
-4. Pull en el servidor Ubuntu de test.
+4. Deploy en el servidor Ubuntu de test: `scripts/deploy.sh` (ver arriba).
 
 `main` está protegida. Nada entra sin PR.
 

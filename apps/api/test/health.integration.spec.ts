@@ -14,6 +14,7 @@ describe('GET /health (integración)', () => {
     process.env.DATABASE_APP_ROLE = 'app_login';
     process.env.BETTER_AUTH_SECRET ??= 'test_secret_'.padEnd(32, 'x');
     process.env.BETTER_AUTH_URL ??= 'http://localhost:3000';
+    process.env.GIT_COMMIT = 'abc1234';
 
     app = await NestFactory.create<NestFastifyApplication>(AppModule, new FastifyAdapter(), {
       logger: false,
@@ -41,6 +42,7 @@ describe('GET /health (integración)', () => {
     expect(body).toMatchObject({
       status: 'ok',
       requestId: '01945f4e-0000-7000-8000-000000000000',
+      commit: 'abc1234',
       database: { reachable: true, connectedAs: 'app_login' },
     });
   });

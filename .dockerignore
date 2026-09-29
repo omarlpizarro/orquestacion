@@ -1,0 +1,13 @@
+**/node_modules
+**/dist
+**/.turbo
+**/.next
+**/*.tsbuildinfo
+.git
+.github
+.env
+.env.*
+!.env.example
+infra/docker/.env
+review-bundle.*
+docs

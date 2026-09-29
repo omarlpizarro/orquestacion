@@ -45,6 +45,7 @@ export class GetHealthHandler {
     return {
       status: 'ok',
       requestId,
+      commit: this.env.GIT_COMMIT,
       database: {
         reachable: true,
         connectedAs: row.connected_as,
