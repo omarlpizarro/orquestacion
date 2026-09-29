@@ -3,7 +3,6 @@ import type { GrantSiteAccessOutput } from '@orq/contracts';
 import type { Tx } from '@orq/db';
 import { hasCapability } from '../../../../shared/auth/access-control.js';
 import { insertMemberSiteAccess } from '../../../../shared/auth/member-site-access.js';
-import { hasImplicitAllSitesAccess, parseSingleOrgRole } from '../../../../shared/auth/org-role.js';
 import { findPriorMutation, recordMutation } from '../../../../shared/database/mutation-log.js';
 import {
   hasPostgresErrorCode,
@@ -12,7 +11,6 @@ import {
 import { TransactionService } from '../../../../shared/database/transaction.service.js';
 import type { TenantIdentity } from '../../../../shared/request-context/request-context.js';
 import { getRequestContext } from '../../../../shared/request-context/request-context.js';
-import { MemberHasImplicitSiteAccessError } from '../../domain/errors/member-has-implicit-site-access.error.js';
 import { MemberNotInOrganizationError } from '../../domain/errors/member-not-in-organization.error.js';
 import { SiteAccessGrantForbiddenError } from '../../domain/errors/site-access-grant-forbidden.error.js';
 import { SiteNotFoundError } from '../../domain/errors/site-not-found.error.js';
@@ -87,14 +85,10 @@ export class GrantSiteAccessHandler {
     });
     if (!member) throw new MemberNotInOrganizationError();
 
-    // El acceso de un miembro se calcula con su rol, leído de `auth.member`
-    // (ADR-015), no con el de quien otorga. Un rol corrupto o con varios
-    // valores falla fuerte acá, donde se decide una autorización.
-    const memberRole = parseSingleOrgRole(member.role);
-    if (hasImplicitAllSitesAccess(memberRole)) {
-      throw new MemberHasImplicitSiteAccessError(memberRole);
-    }
-
+    // Cualquier miembro de la organización puede recibir una fila, también un
+    // `owner` o un `director` (ADR-016): para ellos no cambia lo que pueden
+    // hacer hoy, pero queda registrado que trabajan en ese sitio y no se
+    // pierde si después cambian de rol. No hay nada que validar del rol acá.
     await insertMemberSiteAccess(tx, {
       organizationId: tenant.organizationId,
       memberId: command.member_id,

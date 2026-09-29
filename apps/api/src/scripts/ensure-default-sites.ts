@@ -20,6 +20,7 @@ async function main() {
       `Organizaciones revisadas: ${result.organizationsReviewed}. ` +
         `Sitios creados: ${result.sitesCreated}. ` +
         `Proyectos completados: ${result.projectsBackfilled}. ` +
+        `Accesos otorgados: ${result.memberAccessGranted}. ` +
         `Fallidas: ${result.failed.length}.`,
     );
     for (const failure of result.failed) {

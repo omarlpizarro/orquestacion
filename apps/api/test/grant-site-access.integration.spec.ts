@@ -214,23 +214,24 @@ describe('POST /tenancy/sites/:site_id/access (integración)', () => {
       expect(response.statusCode).toBe(404);
       expect(response.json().data).toMatchObject({ domain_code: 'site_not_found' });
     });
+  });
 
+  describe('owner y director como destinatarios (ADR-016)', () => {
     it.each(['owner', 'director'] as const)(
-      'un %s ya trabaja en todos los sitios: 422, sin fila',
+      'un %s puede recibir una fila: queda registrado que trabaja en ese sitio',
       async (role) => {
         const target = await addMemberWithRole(app, auth, {
           organizationId,
           role,
-          label: `Implícito ${role}`,
+          label: `Destinatario ${role}`,
         });
+        const second = await newSite(organizationId, ownerMemberId);
 
-        const response = await grant(ownerCookie, { siteId, memberId: target.memberId });
+        const response = await grant(ownerCookie, { siteId: second, memberId: target.memberId });
 
-        expect(response.statusCode).toBe(422);
-        expect(response.json().data).toMatchObject({
-          domain_code: 'member_has_implicit_site_access',
-        });
-        expect(await accessRows(organizationId, ownerMemberId, target.memberId)).toEqual([]);
+        expect(response.statusCode, response.body).toBe(200);
+        const rows = await accessRows(organizationId, ownerMemberId, target.memberId);
+        expect(rows.map((row) => row.site_id)).toEqual([second]);
       },
     );
   });
