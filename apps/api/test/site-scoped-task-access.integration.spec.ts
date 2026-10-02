@@ -419,6 +419,18 @@ describe('alcance por sitio sobre tareas (integración)', () => {
       expect(response.json().data).toMatchObject({ domain_code: 'task_site_access_forbidden' });
     });
 
+    it('un manager sin acceso con una versión vieja recibe 403 y no 409', async () => {
+      const task = await insertTask({ projectId: projectB, assigneeMemberId: null });
+
+      const response = await changeStatus(managerA.cookie, task.id, {
+        to_status: 'in_progress',
+        expected_version: task.version + 7,
+      });
+
+      expect(response.statusCode, response.body).toBe(403);
+      expect(response.json().data).toMatchObject({ domain_code: 'task_site_access_forbidden' });
+    });
+
     it('el operator que bloquea una tarea sin asignar deja un task_update block_report a su nombre', async () => {
       const task = await insertTask({ projectId: projectA, assigneeMemberId: null });
 

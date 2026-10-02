@@ -306,6 +306,40 @@ describe('ChangeTaskStatusHandler', () => {
     expect(recordMutation).not.toHaveBeenCalled();
   });
 
+  it('un manager sin acceso con una versión vieja recibe 403, no 409: no se entera de que la tarea cambió', async () => {
+    vi.mocked(findTaskWithSiteById).mockResolvedValue({ ...pendingTask, version: 5 });
+    const { handler } = buildHandler({ hasSiteAccess: false });
+    const manager = { ...tenant, role: 'manager' };
+
+    await expect(
+      runWithRequestContext({ requestId: 'req-1', tenant: manager }, () =>
+        handler.execute(baseCommand),
+      ),
+    ).rejects.toBeInstanceOf(TaskSiteAccessForbiddenError);
+  });
+
+  it('un operator que no es el asignado con una versión vieja recibe 403, no 409', async () => {
+    vi.mocked(findTaskWithSiteById).mockResolvedValue({
+      ...pendingTask,
+      assigneeMemberId: 'otro-member',
+      version: 5,
+    });
+    const { handler } = buildHandler();
+
+    await expect(run(baseCommand, handler)).rejects.toBeInstanceOf(
+      TaskStatusTransitionRequiresAssigneeError,
+    );
+  });
+
+  it('quien sí está autorizado recibe 409 con una versión vieja, y no se escribe nada', async () => {
+    vi.mocked(findTaskWithSiteById).mockResolvedValue({ ...pendingTask, version: 5 });
+    const { handler, collaboration } = buildHandler();
+
+    await expect(run(baseCommand, handler)).rejects.toBeInstanceOf(TaskVersionMismatchError);
+    expect(updateTaskStatus).not.toHaveBeenCalled();
+    expect(collaboration.createTaskUpdate).not.toHaveBeenCalled();
+  });
+
   it('un operator con acceso a una tarea sin asignar puede bloquearla, pero no arrancarla', async () => {
     vi.mocked(findTaskWithSiteById).mockResolvedValue({ ...pendingTask, assigneeMemberId: null });
     vi.mocked(updateTaskStatus).mockResolvedValue({

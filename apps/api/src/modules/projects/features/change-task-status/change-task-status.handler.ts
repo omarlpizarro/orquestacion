@@ -123,10 +123,6 @@ export class ChangeTaskStatusHandler {
       taskId: command.id,
     });
     if (!current) throw new TaskNotFoundError(command.id);
-    if (current.version !== command.expected_version) {
-      throw new TaskVersionMismatchError(command.id, command.expected_version);
-    }
-
     const role = parseSingleOrgRole(tenant.role);
     const hasSiteAccess = await this.tenancy.canAccessSite(tx, {
       organizationId: tenant.organizationId,
@@ -144,6 +140,12 @@ export class ChangeTaskStatusHandler {
       hasSiteAccess,
       reason: command.reason,
     });
+
+    // Después de autorizar, a propósito: un 409 le diría a quien no puede
+    // tocar la tarea que existe y que cambió desde que la vio.
+    if (current.version !== command.expected_version) {
+      throw new TaskVersionMismatchError(command.id, command.expected_version);
+    }
 
     const updated = await updateTaskStatus(tx, {
       organizationId: tenant.organizationId,
