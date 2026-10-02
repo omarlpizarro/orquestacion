@@ -53,7 +53,7 @@ export async function scanTenantTables(
       ) as has_with_check_clause
     from information_schema.columns col
     join pg_class c
-      on c.relname = col.table_name and c.relkind = 'r'
+      on c.relname = col.table_name and c.relkind in ('r', 'p')
     join pg_namespace n
       on n.oid = c.relnamespace and n.nspname = col.table_schema
     where col.table_schema = 'public'

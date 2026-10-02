@@ -35,10 +35,15 @@ Estas no se negocian y no se preguntan. Violarlas es un bug, no una opción de d
 3. **Todo acceso a datos pasa por una transacción con el contexto seteado**
    (`app.current_org`, `app.current_member`, `app.request_id`). Nunca uses el
    cliente de base sin contexto, ni siquiera en un script.
-4. **Nunca uses el rol de base dueño del esquema desde la aplicación.** La app
-   se conecta como `app_login` (hereda los permisos de `app_user`, un rol de
-   grupo `NOLOGIN`), ninguno de los dos con `BYPASSRLS`. Las migraciones corren
-   como `app_owner`, que la aplicación nunca usa.
+4. **Nunca uses el rol de base dueño del esquema desde la aplicación.** La API
+   se conecta como `app_login` y los workers y scripts como `app_worker` (los dos
+   heredan los permisos de `app_user`, un rol de grupo `NOLOGIN`); ninguno de los
+   tres con `BYPASSRLS`. Las migraciones corren como `app_owner`, que la
+   aplicación nunca usa. Existe un cuarto rol, `app_rls_helper`, que **sí** tiene
+   `BYPASSRLS` (ADR-017): es `NOLOGIN`, dueño de las funciones auxiliares de RLS
+   por proyecto y de nada más, y ningún otro rol puede asumirlo (sin membresías,
+   sin `SET ROLE`). La aplicación nunca se conecta con él ni lo usa; un metatest
+   verifica que sigue así.
 5. **Ningún módulo consulta tablas de otro módulo.** Se comunican por servicios
    exportados y eventos in-process. Ver sección 5.
 6. **Los IDs son UUIDv7 generados en el cliente**, no `gen_random_uuid()` del lado
@@ -198,10 +203,12 @@ Detalle completo en `docs/data-model.md`. Lo mínimo que tenés que respetar sie
   (`user`, `session`, `member`), que son singulares y no se pueden renombrar.
 - Toda migración que crea una tabla de negocio nueva termina con
   `select app_apply_tenant_policies();` **y** `select app_apply_version_triggers();`
-  (ambas funciones viven en migraciones ya aplicadas — la primera en
-  `0001_roles_rls`, la segunda en `0005_projects`, ver
-  `packages/db/migrations/`). Las dos son idempotentes: cubren la tabla
-  nueva sin tener que escribir la policy o el trigger de `version` a mano.
+  (y, si la tabla tiene `project_id`, `select app_apply_project_immutability();`;
+  si además tiene `task_id`, `select app_apply_project_id_fill();` — ADR-017)
+  (las funciones viven en migraciones ya aplicadas — `0001_roles_rls`,
+  `0005_projects` y `0012_project_visibility_structure`, ver
+  `packages/db/migrations/`). Todas son idempotentes: cubren la tabla
+  nueva sin tener que escribir la policy o los triggers a mano.
 - **Las migraciones solo agregan; nunca rompen lo que usa el código anterior.**
   Cada migración tiene que dejar funcionando la versión del código que estaba
   desplegada *antes* de ella, por dos motivos: entre el paso de migraciones y

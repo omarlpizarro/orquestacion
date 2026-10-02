@@ -30,6 +30,15 @@ export const taskUpdate = pgTable(
   {
     ...standardColumns(),
     taskId: uuid('task_id').notNull(),
+    /**
+     * ADR-017: copia del `project_id` de la tarea. La llena un trigger
+     * `BEFORE INSERT` si el INSERT no la trae, y la FK compuesta de abajo
+     * impide que difiera de la de la tarea. El esquema ya la declara `NOT NULL`
+     * (estado final); la base la alcanza en dos despliegues, como `site_id`
+     * (ADR-013): `0012` la agrega nullable con un `CHECK ... NOT VALID`, y el
+     * despliegue posterior valida y la pasa a `NOT NULL`.
+     */
+    projectId: uuid('project_id').notNull(),
     kind: text('kind').notNull(),
     body: text('body'),
     metadata: jsonb('metadata').notNull().default({}),
@@ -39,6 +48,10 @@ export const taskUpdate = pgTable(
     foreignKey({
       columns: [table.organizationId, table.taskId],
       foreignColumns: [task.organizationId, task.id],
+    }),
+    foreignKey({
+      columns: [table.organizationId, table.taskId, table.projectId],
+      foreignColumns: [task.organizationId, task.id, task.projectId],
     }),
     // docs/data-model.md, sección "Índices, rendimiento y crecimiento":
     // sirve a la bitácora de una tarea (más reciente primero).

@@ -6,8 +6,13 @@
 # password nunca queda escrito en el repo.
 set -eu
 
+# Falla fuerte, no en silencio: un password vacío dejaría a app_worker sin
+# poder conectarse y nadie se enteraría hasta que arrancara un worker.
+: "${APP_WORKER_PASSWORD:?Falta APP_WORKER_PASSWORD (ADR-017: usuario de base de los workers)}"
+
 sed \
   -e "s/__APP_OWNER_PASSWORD__/${APP_OWNER_PASSWORD}/g" \
   -e "s/__APP_LOGIN_PASSWORD__/${APP_LOGIN_PASSWORD}/g" \
+  -e "s/__APP_WORKER_PASSWORD__/${APP_WORKER_PASSWORD}/g" \
   /bootstrap-sql/bootstrap-roles.sql \
   | psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB"
