@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { OrgRole } from '../../../shared/auth/org-role.js';
 import { InvalidTaskStatusTransitionError } from './errors/invalid-task-status-transition.error.js';
 import { ReasonRequiredError } from './errors/reason-required.error.js';
+import { TaskSiteAccessForbiddenError } from './errors/task-site-access-forbidden.error.js';
 import { TaskStatusTransitionForbiddenError } from './errors/task-status-transition-forbidden.error.js';
 import { TaskStatusTransitionRequiresAssigneeError } from './errors/task-status-transition-requires-assignee.error.js';
 import {
@@ -9,9 +10,23 @@ import {
   isExcludedFromComplianceKpis,
   isTerminalTaskStatus,
   type ReasonKind,
-  resolveTaskStatusTransition,
+  resolveTaskStatusTransition as resolveStrict,
   type TaskStatus,
+  type TaskStatusTransitionRequest,
 } from './task-status-transitions.js';
+
+/**
+ * `hasSiteAccess` e `isUnassigned` son obligatorios en la firma real (un
+ * llamador que los olvide no compila). Las matrices de roles/estados de
+ * abajo no hablan del alcance por sitio, así que los fijan en el caso neutro:
+ * con acceso y con alguien asignado. El alcance se prueba en su propia matriz.
+ */
+function resolveTaskStatusTransition(
+  request: Omit<TaskStatusTransitionRequest, 'hasSiteAccess' | 'isUnassigned'> &
+    Partial<Pick<TaskStatusTransitionRequest, 'hasSiteAccess' | 'isUnassigned'>>,
+) {
+  return resolveStrict({ hasSiteAccess: true, isUnassigned: false, ...request });
+}
 
 const ALL_STATUSES: readonly TaskStatus[] = [
   'pending',
@@ -200,6 +215,206 @@ describe('permiso por asignación: operator solo transiciona sus propias tareas'
         isAssignee: true,
       }),
     ).toThrow(TaskStatusTransitionForbiddenError);
+  });
+});
+
+/**
+ * Matriz rol × acceso al sitio × estado de la asignación × destino. Cada fila
+ * es una decisión de negocio escrita a mano (CLAUDE.md §7, ADR-015), no
+ * derivada de la implementación: `pending → in_progress` y `pending → blocked`
+ * existen para todos los roles, así que lo único que puede rechazar es el
+ * alcance.
+ */
+type Assignment = 'assigned_to_requester' | 'unassigned' | 'assigned_to_other';
+type Outcome = 'allowed' | 'site_access' | 'requires_assignee';
+
+const SCOPE_MATRIX: ReadonlyArray<{
+  role: OrgRole;
+  siteAccess: boolean;
+  assignment: Assignment;
+  toInProgress: Outcome;
+  toBlocked: Outcome;
+}> = [
+  // owner y director: el acceso al sitio es implícito (canAccessSite siempre da true).
+  ...('owner director'.split(' ') as OrgRole[]).flatMap((role) =>
+    ('assigned_to_requester unassigned assigned_to_other'.split(' ') as Assignment[]).map(
+      (assignment) => ({
+        role,
+        siteAccess: true,
+        assignment,
+        toInProgress: 'allowed' as const,
+        toBlocked: 'allowed' as const,
+      }),
+    ),
+  ),
+  // manager con acceso: sin restricción de asignación.
+  {
+    role: 'manager',
+    siteAccess: true,
+    assignment: 'assigned_to_requester',
+    toInProgress: 'allowed',
+    toBlocked: 'allowed',
+  },
+  {
+    role: 'manager',
+    siteAccess: true,
+    assignment: 'unassigned',
+    toInProgress: 'allowed',
+    toBlocked: 'allowed',
+  },
+  {
+    role: 'manager',
+    siteAccess: true,
+    assignment: 'assigned_to_other',
+    toInProgress: 'allowed',
+    toBlocked: 'allowed',
+  },
+  // manager sin acceso: nada, ni siquiera sobre una tarea que tiene asignada.
+  {
+    role: 'manager',
+    siteAccess: false,
+    assignment: 'assigned_to_requester',
+    toInProgress: 'site_access',
+    toBlocked: 'site_access',
+  },
+  {
+    role: 'manager',
+    siteAccess: false,
+    assignment: 'unassigned',
+    toInProgress: 'site_access',
+    toBlocked: 'site_access',
+  },
+  {
+    role: 'manager',
+    siteAccess: false,
+    assignment: 'assigned_to_other',
+    toInProgress: 'site_access',
+    toBlocked: 'site_access',
+  },
+  // operator con acceso: la propia sí; sin asignar solo → blocked; ajena nada.
+  {
+    role: 'operator',
+    siteAccess: true,
+    assignment: 'assigned_to_requester',
+    toInProgress: 'allowed',
+    toBlocked: 'allowed',
+  },
+  {
+    role: 'operator',
+    siteAccess: true,
+    assignment: 'unassigned',
+    toInProgress: 'requires_assignee',
+    toBlocked: 'allowed',
+  },
+  {
+    role: 'operator',
+    siteAccess: true,
+    assignment: 'assigned_to_other',
+    toInProgress: 'requires_assignee',
+    toBlocked: 'requires_assignee',
+  },
+  // operator sin acceso: solo la tarea que tiene asignada (ser el asignado alcanza).
+  {
+    role: 'operator',
+    siteAccess: false,
+    assignment: 'assigned_to_requester',
+    toInProgress: 'allowed',
+    toBlocked: 'allowed',
+  },
+  {
+    role: 'operator',
+    siteAccess: false,
+    assignment: 'unassigned',
+    toInProgress: 'requires_assignee',
+    toBlocked: 'requires_assignee',
+  },
+  {
+    role: 'operator',
+    siteAccess: false,
+    assignment: 'assigned_to_other',
+    toInProgress: 'requires_assignee',
+    toBlocked: 'requires_assignee',
+  },
+];
+
+const OUTCOME_ERROR = {
+  site_access: TaskSiteAccessForbiddenError,
+  requires_assignee: TaskStatusTransitionRequiresAssigneeError,
+} as const;
+
+describe('alcance por sitio: rol × acceso × asignación', () => {
+  for (const row of SCOPE_MATRIX) {
+    for (const [to, outcome] of [
+      ['in_progress', row.toInProgress],
+      ['blocked', row.toBlocked],
+    ] as const) {
+      it(`${row.role}, ${row.siteAccess ? 'con' : 'sin'} acceso, tarea ${row.assignment}, pending -> ${to}: ${outcome}`, () => {
+        const request = {
+          from: 'pending',
+          to,
+          role: row.role,
+          hasSiteAccess: row.siteAccess,
+          isAssignee: row.assignment === 'assigned_to_requester',
+          isUnassigned: row.assignment === 'unassigned',
+          reason: 'Motivo de prueba',
+        } as const;
+
+        if (outcome === 'allowed') {
+          expect(resolveStrict(request).to).toBe(to);
+          return;
+        }
+        expect(() => resolveStrict(request)).toThrow(OUTCOME_ERROR[outcome]);
+      });
+    }
+  }
+
+  it('operator sin asignar con acceso: la excepción vale solo hacia blocked, desde in_progress también', () => {
+    const base = { role: 'operator', hasSiteAccess: true, isUnassigned: true } as const;
+    expect(
+      resolveStrict({ ...base, from: 'in_progress', to: 'blocked', reason: 'Sin material' }).to,
+    ).toBe('blocked');
+    expect(() => resolveStrict({ ...base, from: 'in_progress', to: 'done' })).toThrow(
+      TaskStatusTransitionRequiresAssigneeError,
+    );
+    expect(() => resolveStrict({ ...base, from: 'in_progress', to: 'in_review' })).toThrow(
+      TaskStatusTransitionRequiresAssigneeError,
+    );
+  });
+
+  it('operator sin asignar bloqueando sigue necesitando motivo', () => {
+    expect(() =>
+      resolveStrict({
+        from: 'pending',
+        to: 'blocked',
+        role: 'operator',
+        hasSiteAccess: true,
+        isUnassigned: true,
+      }),
+    ).toThrow(ReasonRequiredError);
+  });
+
+  it('un manager sin acceso se rechaza por sitio antes de mirar la matriz: ni una transición inexistente ni un rol sin permiso lo tapan', () => {
+    const base = { role: 'manager', hasSiteAccess: false, isUnassigned: false } as const;
+    expect(() => resolveStrict({ ...base, from: 'pending', to: 'done' })).toThrow(
+      TaskSiteAccessForbiddenError,
+    );
+    expect(() => resolveStrict({ ...base, from: 'cancelled', to: 'pending' })).toThrow(
+      TaskSiteAccessForbiddenError,
+    );
+  });
+
+  it('fail-closed: owner/director con hasSiteAccess en false tampoco pasan', () => {
+    for (const role of ['owner', 'director'] as const) {
+      expect(() =>
+        resolveStrict({
+          from: 'pending',
+          to: 'in_progress',
+          role,
+          hasSiteAccess: false,
+          isUnassigned: false,
+        }),
+      ).toThrow(TaskSiteAccessForbiddenError);
+    }
   });
 });
 

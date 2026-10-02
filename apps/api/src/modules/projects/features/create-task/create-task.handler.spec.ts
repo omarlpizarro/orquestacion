@@ -4,10 +4,12 @@ import type { TransactionService } from '../../../../shared/database/transaction
 import { domainEvents } from '../../../../shared/domain-events/domain-events.js';
 import { runWithRequestContext } from '../../../../shared/request-context/request-context.js';
 import type { TenancyService } from '../../../tenancy/tenancy.module.js';
+import { AssigneeNotAssignableError } from '../../domain/errors/assignee-not-assignable.error.js';
 import { ParentTaskNotFoundError } from '../../domain/errors/parent-task-not-found.error.js';
 import { ProjectNotFoundError } from '../../domain/errors/project-not-found.error.js';
 import { TaskCreateForbiddenError } from '../../domain/errors/task-create-forbidden.error.js';
 import { TaskDepthExceededError } from '../../domain/errors/task-depth-exceeded.error.js';
+import { TaskSiteAccessForbiddenError } from '../../domain/errors/task-site-access-forbidden.error.js';
 import {
   findLastSiblingPosition,
   findParentTaskForTenant,
@@ -60,13 +62,18 @@ const insertedTask: TaskRow = {
   createdAt: '2026-09-20T00:00:00.000Z',
 };
 
-function buildHandler() {
+const siteId = '01945f4e-0000-7000-8000-0000000000aa';
+
+function buildHandler(options: { canAccessSite?: boolean; isMemberAssignable?: boolean } = {}) {
   const withTenant = vi.fn(async (fn: (tx: unknown) => unknown) => fn({}));
   const transactions = { withTenant } as unknown as TransactionService;
   const tenancy = {
     resolveTimezone: vi.fn().mockResolvedValue('America/Argentina/Buenos_Aires'),
-  } as unknown as TenancyService;
-  return new CreateTaskHandler(transactions, tenancy);
+    canAccessSite: vi.fn().mockResolvedValue(options.canAccessSite ?? true),
+    isMemberAssignable: vi.fn().mockResolvedValue(options.isMemberAssignable ?? true),
+  };
+  const handler = new CreateTaskHandler(transactions, tenancy as unknown as TenancyService);
+  return Object.assign(handler, { tenancyMock: tenancy });
 }
 
 function run<T>(command: CreateTaskCommand, handler: CreateTaskHandler): Promise<T> {
@@ -79,7 +86,7 @@ describe('CreateTaskHandler', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(findPriorMutation).mockResolvedValue(null);
-    vi.mocked(findProjectForTenant).mockResolvedValue({ id: baseCommand.project_id, siteId: null });
+    vi.mocked(findProjectForTenant).mockResolvedValue({ id: baseCommand.project_id, siteId });
     vi.mocked(findLastSiblingPosition).mockResolvedValue(null);
     vi.mocked(insertTask).mockResolvedValue(insertedTask);
   });
@@ -218,6 +225,66 @@ describe('CreateTaskHandler', () => {
     );
 
     expect(result.id).toBe(insertedTask.id);
+  });
+
+  it('un manager con acceso al sitio del proyecto crea la tarea; canAccessSite recibe su rol y el sitio', async () => {
+    const handler = buildHandler();
+    const manager = { ...tenant, role: 'manager' };
+
+    await runWithRequestContext({ requestId: 'req-1', tenant: manager }, () =>
+      handler.execute(baseCommand),
+    );
+
+    expect(handler.tenancyMock.canAccessSite).toHaveBeenCalledWith(
+      {},
+      { organizationId: tenant.organizationId, memberId: tenant.memberId, role: 'manager', siteId },
+    );
+    expect(insertTask).toHaveBeenCalled();
+  });
+
+  it('un manager sin acceso al sitio del proyecto rechaza con TaskSiteAccessForbiddenError y no inserta ni registra la mutación', async () => {
+    const handler = buildHandler({ canAccessSite: false });
+    const manager = { ...tenant, role: 'manager' };
+
+    await expect(
+      runWithRequestContext({ requestId: 'req-1', tenant: manager }, () =>
+        handler.execute(baseCommand),
+      ),
+    ).rejects.toBeInstanceOf(TaskSiteAccessForbiddenError);
+    expect(insertTask).not.toHaveBeenCalled();
+    expect(recordMutation).not.toHaveBeenCalled();
+  });
+
+  it('valida assignee_member_id con isMemberAssignable sobre el sitio del proyecto', async () => {
+    const handler = buildHandler();
+
+    await run({ ...baseCommand, assignee_member_id: 'member_assignee' }, handler);
+
+    expect(handler.tenancyMock.isMemberAssignable).toHaveBeenCalledWith(
+      {},
+      { organizationId: tenant.organizationId, memberId: 'member_assignee', siteId },
+    );
+    expect(insertTask).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({ assigneeMemberId: 'member_assignee' }),
+    );
+  });
+
+  it('rechaza con AssigneeNotAssignableError si el asignado no es de la organización o no trabaja en el sitio', async () => {
+    const handler = buildHandler({ isMemberAssignable: false });
+
+    await expect(
+      run({ ...baseCommand, assignee_member_id: 'member_ajeno' }, handler),
+    ).rejects.toBeInstanceOf(AssigneeNotAssignableError);
+    expect(insertTask).not.toHaveBeenCalled();
+  });
+
+  it('sin assignee_member_id no consulta si alguien es asignable', async () => {
+    const handler = buildHandler();
+
+    await run(baseCommand, handler);
+
+    expect(handler.tenancyMock.isMemberAssignable).not.toHaveBeenCalled();
   });
 
   it('si insertTask choca con una violación de unicidad (dos requests con el mismo client_mutation_id a la vez), relee la mutación anterior en vez de romper con un 500 opaco', async () => {

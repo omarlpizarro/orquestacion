@@ -1,6 +1,7 @@
 import { ORG_ROLES, type OrgRole } from '../../../shared/auth/org-role.js';
 import { InvalidTaskStatusTransitionError } from './errors/invalid-task-status-transition.error.js';
 import { ReasonRequiredError } from './errors/reason-required.error.js';
+import { TaskSiteAccessForbiddenError } from './errors/task-site-access-forbidden.error.js';
 import { TaskStatusTransitionForbiddenError } from './errors/task-status-transition-forbidden.error.js';
 import { TaskStatusTransitionRequiresAssigneeError } from './errors/task-status-transition-requires-assignee.error.js';
 import type { ReasonKind, TaskStatus } from './task-status.js';
@@ -50,11 +51,10 @@ export interface TaskStatusTransition {
  * con `blocked ⇄ in_progress`, y ahora `pending → blocked` directo para el
  * caso de campo más común: no se puede ni arrancar) lo ejecuta cualquier
  * rol — pero cuando ese rol es `operator`, solo sobre una tarea de la que
- * es asignado (`TaskStatusTransitionRequest.isAssignee`, CLAUDE.md §7: nivel
- * 3 es "sus tareas y su sitio", no cualquier tarea de la organización). El
- * scoping por sitio (`member_site_access`) para roles de gerencia queda
- * pendiente, documentado junto al resto de ese gap en
- * `docs/phase-2-brief.md`.
+ * es asignado, o sin asignar en un sitio suyo y solo hacia `blocked`
+ * (`canOperatorActOnTask`, CLAUDE.md §7: nivel 3 es "sus tareas y su sitio",
+ * no cualquier tarea de la organización). Un `manager` solo actúa en sus
+ * sitios (`hasSiteAccess`, ADR-015).
  *
  * Cancelar y resolver una revisión (`in_review → in_progress` o `→ done`)
  * quedan reservados a `MANAGEMENT_ROLES`: cancelar es una decisión de
@@ -205,6 +205,15 @@ export interface TaskStatusTransitionRequest {
    * real; el dominio no consulta la base.
    */
   readonly isAssignee?: boolean | undefined;
+  /**
+   * Resultado de `TenancyService.canAccessSite` para quien pide la
+   * transición, sobre el sitio del proyecto de la tarea. Obligatorio, sin
+   * default: un llamador que olvide resolverlo no compila, en vez de dejar
+   * pasar a todos. El dominio no consulta la base.
+   */
+  readonly hasSiteAccess: boolean;
+  /** `true` cuando la tarea no tiene `assignee_member_id`. Solo cuenta para `operator`. */
+  readonly isUnassigned: boolean;
   /** Motivo exigido cuando `transition.requiresReason` no es `null` (ver ese campo). */
   readonly reason?: string | undefined;
 }
@@ -222,6 +231,17 @@ export interface ResolvedTaskStatusTransition extends TaskStatusTransition {
 }
 
 /**
+ * CLAUDE.md §7, nivel 3: un operator actúa sobre las tareas que tiene
+ * asignadas. La única excepción es una tarea sin asignar de un sitio donde
+ * trabaja, y ahí solo puede marcarla como bloqueada: el caso de campo en que
+ * alguien ve que no se puede ni arrancar y no hay nadie a quien avisarle.
+ */
+function canOperatorActOnTask(request: TaskStatusTransitionRequest): boolean {
+  if (request.isAssignee) return true;
+  return request.hasSiteAccess && request.isUnassigned && request.to === 'blocked';
+}
+
+/**
  * Valida una transición pedida y devuelve la definición, más el motivo ya
  * validado, para que el handler sepa qué efectos aplicar —
  * `requiresReason`/`setsActualEndAt`/`clearsActualEndAt`/`reason` son
@@ -235,11 +255,19 @@ export interface ResolvedTaskStatusTransition extends TaskStatusTransition {
  * transición misma, así que no hay "rol permitido" que evaluar para un par
  * `(from, to)` que no está en la tabla. Recién con la transición en mano
  * tiene sentido preguntar por rol, después por asignación (para `operator`,
- * CLAUDE.md §7) y por último por el motivo, si esa transición lo exige.
+ * CLAUDE.md §7) y por último por el motivo, si esa transición lo exige. El
+ * acceso al sitio de un rol que no es `operator` va antes que todo.
  */
 export function resolveTaskStatusTransition(
   request: TaskStatusTransitionRequest,
 ): ResolvedTaskStatusTransition {
+  // Antes de mirar la matriz, a propósito: fuera de su sitio un manager no
+  // puede nada sobre la tarea, ni siquiera enterarse de qué transiciones
+  // existen. Para operator el acceso al sitio no corta acá sino en la regla
+  // de asignación, porque ser el asignado alcanza sin él.
+  if (request.role !== 'operator' && !request.hasSiteAccess) {
+    throw new TaskSiteAccessForbiddenError();
+  }
   const transition = findTaskStatusTransition(request.from, request.to);
   if (!transition) {
     throw new InvalidTaskStatusTransitionError(request.from, request.to);
@@ -247,7 +275,7 @@ export function resolveTaskStatusTransition(
   if (!transition.allowedRoles.includes(request.role)) {
     throw new TaskStatusTransitionForbiddenError(request.from, request.to, request.role);
   }
-  if (request.role === 'operator' && !request.isAssignee) {
+  if (request.role === 'operator' && !canOperatorActOnTask(request)) {
     throw new TaskStatusTransitionRequiresAssigneeError(request.from, request.to);
   }
   if (!transition.requiresReason) {

@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import type { TaskOutput } from '@orq/contracts';
 import type { Tx } from '@orq/db';
 import { hasCapability } from '../../../../shared/auth/access-control.js';
+import { parseSingleOrgRole } from '../../../../shared/auth/org-role.js';
 import { findPriorMutation, recordMutation } from '../../../../shared/database/mutation-log.js';
 import {
   hasPostgresErrorCode,
@@ -12,10 +13,12 @@ import { domainEvents } from '../../../../shared/domain-events/domain-events.js'
 import type { TenantIdentity } from '../../../../shared/request-context/request-context.js';
 import { getRequestContext } from '../../../../shared/request-context/request-context.js';
 import { TenancyService } from '../../../tenancy/tenancy.module.js';
+import { AssigneeNotAssignableError } from '../../domain/errors/assignee-not-assignable.error.js';
 import { ParentTaskNotFoundError } from '../../domain/errors/parent-task-not-found.error.js';
 import { ProjectNotFoundError } from '../../domain/errors/project-not-found.error.js';
 import { TaskCreateForbiddenError } from '../../domain/errors/task-create-forbidden.error.js';
 import { TaskDepthExceededError } from '../../domain/errors/task-depth-exceeded.error.js';
+import { TaskSiteAccessForbiddenError } from '../../domain/errors/task-site-access-forbidden.error.js';
 import { localDatetimeToUtc } from '../../domain/local-datetime-to-utc.js';
 import { exceedsMaxTaskDepth } from '../../domain/max-task-depth.js';
 import { nextTaskPosition } from '../../domain/task-position.js';
@@ -112,6 +115,26 @@ export class CreateTaskHandler {
       projectId: command.project_id,
     });
     if (!project) throw new ProjectNotFoundError(command.project_id);
+
+    // `task:create` es una capacidad gruesa (¿puede crear tareas?); el
+    // alcance por sitio es la otra mitad: ¿en este proyecto? Un manager solo
+    // en los sitios donde tiene acceso.
+    const canAccessSite = await this.tenancy.canAccessSite(tx, {
+      organizationId: tenant.organizationId,
+      memberId: tenant.memberId,
+      role: parseSingleOrgRole(tenant.role),
+      siteId: project.siteId,
+    });
+    if (!canAccessSite) throw new TaskSiteAccessForbiddenError();
+
+    if (command.assignee_member_id) {
+      const assignable = await this.tenancy.isMemberAssignable(tx, {
+        organizationId: tenant.organizationId,
+        memberId: command.assignee_member_id,
+        siteId: project.siteId,
+      });
+      if (!assignable) throw new AssigneeNotAssignableError(command.assignee_member_id);
+    }
 
     if (command.parent_task_id) {
       const parent = await findParentTaskForTenant(tx, {

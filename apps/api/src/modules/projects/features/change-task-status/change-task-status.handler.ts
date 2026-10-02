@@ -15,6 +15,7 @@ import {
   CollaborationService,
   type TaskUpdateKind,
 } from '../../../collaboration/collaboration.module.js';
+import { TenancyService } from '../../../tenancy/tenancy.module.js';
 import { TaskNotFoundError } from '../../domain/errors/task-not-found.error.js';
 import { TaskVersionMismatchError } from '../../domain/errors/task-version-mismatch.error.js';
 import {
@@ -24,6 +25,7 @@ import {
 } from '../../domain/task-status-transitions.js';
 import {
   findTaskById,
+  findTaskWithSiteById,
   type TaskRow,
   updateTaskStatus,
 } from '../../infrastructure/task.repository.js';
@@ -48,6 +50,7 @@ export class ChangeTaskStatusHandler {
   constructor(
     private readonly transactions: TransactionService,
     private readonly collaboration: CollaborationService,
+    private readonly tenancy: TenancyService,
   ) {}
 
   async execute(command: ChangeTaskStatusCommand): Promise<TaskOutput> {
@@ -115,7 +118,7 @@ export class ChangeTaskStatusHandler {
       if (existing) return { task: existing, fromStatus: null };
     }
 
-    const current = await findTaskById(tx, {
+    const current = await findTaskWithSiteById(tx, {
       organizationId: tenant.organizationId,
       taskId: command.id,
     });
@@ -124,11 +127,21 @@ export class ChangeTaskStatusHandler {
       throw new TaskVersionMismatchError(command.id, command.expected_version);
     }
 
+    const role = parseSingleOrgRole(tenant.role);
+    const hasSiteAccess = await this.tenancy.canAccessSite(tx, {
+      organizationId: tenant.organizationId,
+      memberId: tenant.memberId,
+      role,
+      siteId: current.siteId,
+    });
+
     const transition = resolveTaskStatusTransition({
       from: current.status as TaskStatus,
       to: command.to_status,
-      role: parseSingleOrgRole(tenant.role),
+      role,
       isAssignee: current.assigneeMemberId === tenant.memberId,
+      isUnassigned: current.assigneeMemberId === null,
+      hasSiteAccess,
       reason: command.reason,
     });
 
