@@ -28,3 +28,16 @@ export async function findMemberForTenant(
   `);
   return result.rows[0] ?? null;
 }
+
+export async function hasMemberSiteAccessRow(
+  tx: Tx,
+  params: { organizationId: string; memberId: string; siteId: string },
+): Promise<boolean> {
+  const result = await tx.execute<{ member_id: string }>(sql`
+    select member_id from member_site_access
+    where organization_id = ${params.organizationId}
+      and member_id = ${params.memberId}
+      and site_id = ${params.siteId}
+  `);
+  return result.rows.length > 0;
+}

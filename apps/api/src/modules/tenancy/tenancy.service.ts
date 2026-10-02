@@ -5,10 +5,32 @@ import {
   type EnsureDefaultSiteParams,
   ensureDefaultSite,
 } from '../../shared/auth/ensure-default-site.js';
+import {
+  hasImplicitAllSitesAccess,
+  type OrgRole,
+  parseSingleOrgRole,
+} from '../../shared/auth/org-role.js';
+import {
+  findMemberForTenant,
+  hasMemberSiteAccessRow,
+} from './infrastructure/site-access.repository.js';
 
 export interface ResolveTimezoneParams {
   organizationId: string;
   siteId: string | null;
+}
+
+export interface CanAccessSiteParams {
+  organizationId: string;
+  memberId: string;
+  role: OrgRole;
+  siteId: string;
+}
+
+export interface IsMemberAssignableParams {
+  organizationId: string;
+  memberId: string;
+  siteId: string;
 }
 
 /**
@@ -44,6 +66,34 @@ export class TenancyService {
       );
     }
     return result.rows[0].timezone;
+  }
+
+  /**
+   * ¿Puede un miembro con este rol trabajar en este sitio? `owner` y
+   * `director` sí, en todos, sin necesitar fila (`hasImplicitAllSitesAccess`);
+   * `manager` y `operator` solo donde tienen una fila en `member_site_access`
+   * (ADR-015: la tabla no tiene rol, el rol viene siempre de afuera). Único
+   * lugar que combina las dos cosas: nadie fuera de `tenancy` mira esa tabla
+   * (regla dura 5), y quien mirara solo la tabla le negaría el acceso a un
+   * `owner`.
+   */
+  async canAccessSite(tx: Tx, params: CanAccessSiteParams): Promise<boolean> {
+    if (hasImplicitAllSitesAccess(params.role)) return true;
+    return hasMemberSiteAccessRow(tx, params);
+  }
+
+  /**
+   * ¿Se le puede asignar una tarea de este sitio a este miembro? Que exista
+   * en la organización y que pueda trabajar en el sitio, con **su** rol —
+   * leído de `auth.member`, no del de quien asigna. `false` tanto si no es de
+   * la organización como si no tiene acceso: quien llama no necesita
+   * distinguirlos, y distinguirlos le diría a quien asigna si un id ajeno
+   * corresponde a un miembro de otra organización.
+   */
+  async isMemberAssignable(tx: Tx, params: IsMemberAssignableParams): Promise<boolean> {
+    const member = await findMemberForTenant(tx, params);
+    if (!member) return false;
+    return this.canAccessSite(tx, { ...params, role: parseSingleOrgRole(member.role) });
   }
 
   /**

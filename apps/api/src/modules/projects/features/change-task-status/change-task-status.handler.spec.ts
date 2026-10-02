@@ -4,15 +4,18 @@ import type { TransactionService } from '../../../../shared/database/transaction
 import { domainEvents } from '../../../../shared/domain-events/domain-events.js';
 import { runWithRequestContext } from '../../../../shared/request-context/request-context.js';
 import type { CollaborationService } from '../../../collaboration/collaboration.module.js';
+import type { TenancyService } from '../../../tenancy/tenancy.module.js';
 import { InvalidTaskStatusTransitionError } from '../../domain/errors/invalid-task-status-transition.error.js';
 import { ReasonRequiredError } from '../../domain/errors/reason-required.error.js';
 import { TaskNotFoundError } from '../../domain/errors/task-not-found.error.js';
+import { TaskSiteAccessForbiddenError } from '../../domain/errors/task-site-access-forbidden.error.js';
 import { TaskStatusTransitionForbiddenError } from '../../domain/errors/task-status-transition-forbidden.error.js';
 import { TaskStatusTransitionRequiresAssigneeError } from '../../domain/errors/task-status-transition-requires-assignee.error.js';
 import { TaskVersionMismatchError } from '../../domain/errors/task-version-mismatch.error.js';
 import {
   findTaskById,
-  type TaskRow,
+  findTaskWithSiteById,
+  type TaskWithSiteRow,
   updateTaskStatus,
 } from '../../infrastructure/task.repository.js';
 import type { ChangeTaskStatusCommand } from './change-task-status.command.js';
@@ -24,6 +27,7 @@ vi.mock('../../../../shared/database/mutation-log.js', () => ({
 }));
 vi.mock('../../infrastructure/task.repository.js', () => ({
   findTaskById: vi.fn(),
+  findTaskWithSiteById: vi.fn(),
   updateTaskStatus: vi.fn(),
 }));
 
@@ -36,7 +40,10 @@ const baseCommand: ChangeTaskStatusCommand = {
   expected_version: 1,
 };
 
-const pendingTask: TaskRow = {
+const siteId = '01945f4e-0000-7000-8000-0000000000aa';
+
+const pendingTask: TaskWithSiteRow = {
+  siteId,
   id: baseCommand.id,
   organizationId: tenant.organizationId,
   projectId: '01945f4e-0000-7000-8000-000000000002',
@@ -56,9 +63,10 @@ const pendingTask: TaskRow = {
   createdAt: '2026-09-20T00:00:00.000Z',
 };
 
-const inProgressTask: TaskRow = { ...pendingTask, status: 'in_progress', version: 2 };
+const inProgressTask: TaskWithSiteRow = { ...pendingTask, status: 'in_progress', version: 2 };
 
-function buildHandler() {
+function buildHandler(options: { hasSiteAccess?: boolean } = {}) {
+  const canAccessSite = vi.fn().mockResolvedValue(options.hasSiteAccess ?? true);
   const withTenant = vi.fn(async (fn: (tx: unknown) => unknown) => fn({}));
   const transactions = { withTenant } as unknown as TransactionService;
   const collaboration = {
@@ -70,7 +78,12 @@ function buildHandler() {
       createdAt: '2026-09-20T00:00:00.000Z',
     }),
   } as unknown as CollaborationService;
-  return { handler: new ChangeTaskStatusHandler(transactions, collaboration), collaboration };
+  const tenancy = { canAccessSite } as unknown as TenancyService;
+  return {
+    handler: new ChangeTaskStatusHandler(transactions, collaboration, tenancy),
+    collaboration,
+    canAccessSite,
+  };
 }
 
 function run<T>(command: ChangeTaskStatusCommand, handler: ChangeTaskStatusHandler): Promise<T> {
@@ -83,7 +96,7 @@ describe('ChangeTaskStatusHandler', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(findPriorMutation).mockResolvedValue(null);
-    vi.mocked(findTaskById).mockResolvedValue(pendingTask);
+    vi.mocked(findTaskWithSiteById).mockResolvedValue(pendingTask);
     vi.mocked(updateTaskStatus).mockResolvedValue(inProgressTask);
   });
 
@@ -122,7 +135,7 @@ describe('ChangeTaskStatusHandler', () => {
   });
 
   it('crea un task_update de tipo block_report con el motivo en body al bloquear', async () => {
-    vi.mocked(findTaskById).mockResolvedValue({ ...pendingTask, status: 'in_progress' });
+    vi.mocked(findTaskWithSiteById).mockResolvedValue({ ...pendingTask, status: 'in_progress' });
     vi.mocked(updateTaskStatus).mockResolvedValue({
       ...pendingTask,
       status: 'blocked',
@@ -146,7 +159,7 @@ describe('ChangeTaskStatusHandler', () => {
   });
 
   it('guarda el motivo recortado de espacios, no el que mandó el cliente tal cual', async () => {
-    vi.mocked(findTaskById).mockResolvedValue({ ...pendingTask, status: 'in_progress' });
+    vi.mocked(findTaskWithSiteById).mockResolvedValue({ ...pendingTask, status: 'in_progress' });
     vi.mocked(updateTaskStatus).mockResolvedValue({
       ...pendingTask,
       status: 'blocked',
@@ -166,7 +179,7 @@ describe('ChangeTaskStatusHandler', () => {
   });
 
   it('setsActualEndAt en true al completar la tarea', async () => {
-    vi.mocked(findTaskById).mockResolvedValue({ ...pendingTask, status: 'in_progress' });
+    vi.mocked(findTaskWithSiteById).mockResolvedValue({ ...pendingTask, status: 'in_progress' });
     vi.mocked(updateTaskStatus).mockResolvedValue({ ...pendingTask, status: 'done', version: 2 });
     const { handler } = buildHandler();
 
@@ -179,7 +192,7 @@ describe('ChangeTaskStatusHandler', () => {
   });
 
   it('clearsActualEndAt en true y kind reopen al reabrir una tarea done (ADR-012), rol manager', async () => {
-    vi.mocked(findTaskById).mockResolvedValue({
+    vi.mocked(findTaskWithSiteById).mockResolvedValue({
       ...pendingTask,
       status: 'done',
       assigneeMemberId: null,
@@ -211,7 +224,7 @@ describe('ChangeTaskStatusHandler', () => {
   });
 
   it('rechaza con TaskNotFoundError si la tarea no existe', async () => {
-    vi.mocked(findTaskById).mockResolvedValue(null);
+    vi.mocked(findTaskWithSiteById).mockResolvedValue(null);
     const { handler } = buildHandler();
 
     await expect(run(baseCommand, handler)).rejects.toBeInstanceOf(TaskNotFoundError);
@@ -219,7 +232,7 @@ describe('ChangeTaskStatusHandler', () => {
   });
 
   it('rechaza con TaskVersionMismatchError si expected_version no coincide con la fila leída', async () => {
-    vi.mocked(findTaskById).mockResolvedValue({ ...pendingTask, version: 5 });
+    vi.mocked(findTaskWithSiteById).mockResolvedValue({ ...pendingTask, version: 5 });
     const { handler } = buildHandler();
 
     await expect(run(baseCommand, handler)).rejects.toBeInstanceOf(TaskVersionMismatchError);
@@ -243,7 +256,7 @@ describe('ChangeTaskStatusHandler', () => {
   });
 
   it('propaga TaskStatusTransitionForbiddenError si el rol no puede hacer esa transición', async () => {
-    vi.mocked(findTaskById).mockResolvedValue({ ...pendingTask, status: 'in_review' });
+    vi.mocked(findTaskWithSiteById).mockResolvedValue({ ...pendingTask, status: 'in_review' });
     const { handler } = buildHandler();
 
     await expect(run({ ...baseCommand, to_status: 'done' }, handler)).rejects.toBeInstanceOf(
@@ -252,12 +265,110 @@ describe('ChangeTaskStatusHandler', () => {
   });
 
   it('propaga TaskStatusTransitionRequiresAssigneeError si un operator no asignado intenta transicionar', async () => {
-    vi.mocked(findTaskById).mockResolvedValue({ ...pendingTask, assigneeMemberId: 'otro-member' });
+    vi.mocked(findTaskWithSiteById).mockResolvedValue({
+      ...pendingTask,
+      assigneeMemberId: 'otro-member',
+    });
     const { handler } = buildHandler();
 
     await expect(run(baseCommand, handler)).rejects.toBeInstanceOf(
       TaskStatusTransitionRequiresAssigneeError,
     );
+  });
+
+  it('le pasa a canAccessSite el rol de quien pide y el sitio del proyecto de la tarea', async () => {
+    const { handler, canAccessSite } = buildHandler();
+
+    await run(baseCommand, handler);
+
+    expect(canAccessSite).toHaveBeenCalledWith(
+      {},
+      {
+        organizationId: tenant.organizationId,
+        memberId: tenant.memberId,
+        role: 'operator',
+        siteId,
+      },
+    );
+  });
+
+  it('un manager sin acceso al sitio de la tarea rechaza con TaskSiteAccessForbiddenError antes de tocar nada', async () => {
+    const { handler, collaboration } = buildHandler({ hasSiteAccess: false });
+    const manager = { ...tenant, role: 'manager' };
+
+    await expect(
+      runWithRequestContext({ requestId: 'req-1', tenant: manager }, () =>
+        handler.execute(baseCommand),
+      ),
+    ).rejects.toBeInstanceOf(TaskSiteAccessForbiddenError);
+    expect(updateTaskStatus).not.toHaveBeenCalled();
+    expect(collaboration.createTaskUpdate).not.toHaveBeenCalled();
+    expect(recordMutation).not.toHaveBeenCalled();
+  });
+
+  it('un manager sin acceso con una versión vieja recibe 403, no 409: no se entera de que la tarea cambió', async () => {
+    vi.mocked(findTaskWithSiteById).mockResolvedValue({ ...pendingTask, version: 5 });
+    const { handler } = buildHandler({ hasSiteAccess: false });
+    const manager = { ...tenant, role: 'manager' };
+
+    await expect(
+      runWithRequestContext({ requestId: 'req-1', tenant: manager }, () =>
+        handler.execute(baseCommand),
+      ),
+    ).rejects.toBeInstanceOf(TaskSiteAccessForbiddenError);
+  });
+
+  it('un operator que no es el asignado con una versión vieja recibe 403, no 409', async () => {
+    vi.mocked(findTaskWithSiteById).mockResolvedValue({
+      ...pendingTask,
+      assigneeMemberId: 'otro-member',
+      version: 5,
+    });
+    const { handler } = buildHandler();
+
+    await expect(run(baseCommand, handler)).rejects.toBeInstanceOf(
+      TaskStatusTransitionRequiresAssigneeError,
+    );
+  });
+
+  it('quien sí está autorizado recibe 409 con una versión vieja, y no se escribe nada', async () => {
+    vi.mocked(findTaskWithSiteById).mockResolvedValue({ ...pendingTask, version: 5 });
+    const { handler, collaboration } = buildHandler();
+
+    await expect(run(baseCommand, handler)).rejects.toBeInstanceOf(TaskVersionMismatchError);
+    expect(updateTaskStatus).not.toHaveBeenCalled();
+    expect(collaboration.createTaskUpdate).not.toHaveBeenCalled();
+  });
+
+  it('un operator con acceso a una tarea sin asignar puede bloquearla, pero no arrancarla', async () => {
+    vi.mocked(findTaskWithSiteById).mockResolvedValue({ ...pendingTask, assigneeMemberId: null });
+    vi.mocked(updateTaskStatus).mockResolvedValue({
+      ...pendingTask,
+      assigneeMemberId: null,
+      status: 'blocked',
+      version: 2,
+    });
+    const { handler } = buildHandler();
+
+    const blocked = await run<{ status: string }>(
+      { ...baseCommand, to_status: 'blocked', reason: 'Falta el permiso municipal' },
+      handler,
+    );
+    expect(blocked.status).toBe('blocked');
+
+    await expect(run(baseCommand, handler)).rejects.toBeInstanceOf(
+      TaskStatusTransitionRequiresAssigneeError,
+    );
+  });
+
+  it('un operator sin acceso al sitio no puede bloquear una tarea sin asignar', async () => {
+    vi.mocked(findTaskWithSiteById).mockResolvedValue({ ...pendingTask, assigneeMemberId: null });
+    const { handler } = buildHandler({ hasSiteAccess: false });
+
+    await expect(
+      run({ ...baseCommand, to_status: 'blocked', reason: 'Falta el permiso' }, handler),
+    ).rejects.toBeInstanceOf(TaskStatusTransitionRequiresAssigneeError);
+    expect(updateTaskStatus).not.toHaveBeenCalled();
   });
 
   it('propaga ReasonRequiredError al bloquear sin motivo', async () => {
@@ -341,9 +452,8 @@ describe('ChangeTaskStatusHandler', () => {
       result: 'applied',
       rejectionReason: null,
     });
-    vi.mocked(findTaskById)
-      .mockResolvedValueOnce(pendingTask)
-      .mockResolvedValueOnce(inProgressTask);
+    vi.mocked(findTaskWithSiteById).mockResolvedValueOnce(pendingTask);
+    vi.mocked(findTaskById).mockResolvedValueOnce(inProgressTask);
     const { handler } = buildHandler();
 
     const result = await run<{ status: string }>(baseCommand, handler);
