@@ -54,7 +54,8 @@ export async function startPostgresHarness(): Promise<PostgresHarness> {
   const superuserUri = container.getConnectionUri();
   const bootstrapSql = readFileSync(bootstrapRolesSqlPath, 'utf8')
     .replaceAll('__APP_OWNER_PASSWORD__', 'app_owner_test_password')
-    .replaceAll('__APP_LOGIN_PASSWORD__', 'app_login_test_password');
+    .replaceAll('__APP_LOGIN_PASSWORD__', 'app_login_test_password')
+    .replaceAll('__APP_WORKER_PASSWORD__', 'app_worker_test_password');
 
   const superuserPool = new Pool({ connectionString: superuserUri });
   try {

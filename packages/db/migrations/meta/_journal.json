@@ -85,6 +85,13 @@
       "when": 1790717368466,
       "tag": "0011_member_site_access_drop_role",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1790982279717,
+      "tag": "0012_project_visibility_structure",
+      "breakpoints": true
     }
   ]
 }

@@ -9,6 +9,7 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
 import { ltree, standardColumns } from '../../columns.js';
@@ -21,6 +22,12 @@ export const project = pgTable(
     ...standardColumns(),
     siteId: uuid('site_id').notNull(),
     sopTemplateId: uuid('sop_template_id'),
+    /**
+     * ADR-017: los proyectos son reservados por defecto. Los que ya existían
+     * al agregar la columna quedaron en `site` (ver `0012`) para no cambiar lo
+     * que ven hoy; nada lee esta columna hasta el PR de comportamiento.
+     */
+    visibility: text('visibility').notNull().default('reserved'),
     code: text('code').notNull(),
     name: text('name').notNull(),
     description: text('description'),
@@ -52,6 +59,37 @@ export const project = pgTable(
       'project_status_check',
       sql`${table.status} in ('planning','active','on_hold','archived')`,
     ),
+    check('project_visibility_check', sql`${table.visibility} in ('reserved','site')`),
+  ],
+);
+
+/**
+ * ADR-017: miembros explícitos de un proyecto. Sin rol (ADR-015): el rol sale
+ * siempre de la organización. Quitar a alguien es `deleted_at`, nunca un
+ * borrado físico (regla dura 9). `project_id` es inmutable una vez fijado
+ * (`app_apply_project_immutability()`).
+ */
+export const projectMember = pgTable(
+  'project_member',
+  {
+    ...standardColumns(),
+    projectId: uuid('project_id').notNull(),
+    memberId: text('member_id').notNull(),
+  },
+  (table) => [
+    foreignKey({
+      columns: [table.organizationId, table.projectId],
+      foreignColumns: [project.organizationId, project.id],
+    }),
+    // Un miembro activo por proyecto; con `deleted_at` se puede volver a agregar.
+    uniqueIndex('project_member_org_project_member_active_uidx')
+      .on(table.organizationId, table.projectId, table.memberId)
+      .where(sql`${table.deletedAt} is null`),
+    // "En qué proyectos participa este miembro": sirve a las funciones de RLS
+    // del PR de comportamiento.
+    index('project_member_org_member_project_idx')
+      .on(table.organizationId, table.memberId, table.projectId)
+      .where(sql`${table.deletedAt} is null`),
   ],
 );
 
@@ -84,6 +122,9 @@ export const task = pgTable(
   },
   (table) => [
     unique().on(table.organizationId, table.id),
+    // ADR-017: blanco de la FK compuesta de las tablas hijas que copian
+    // `project_id`, para que la copia no pueda diverger del proyecto de la tarea.
+    unique().on(table.organizationId, table.id, table.projectId),
     foreignKey({
       columns: [table.organizationId, table.projectId],
       foreignColumns: [project.organizationId, project.id],

@@ -162,6 +162,8 @@ CREATE TABLE project (
   organization_id  text NOT NULL,
   site_id          uuid NOT NULL,
   sop_template_id  uuid,
+  visibility       text NOT NULL DEFAULT 'reserved'
+                     CHECK (visibility IN ('reserved','site')),
   code             text NOT NULL,
   name             text NOT NULL,
   description      text,
@@ -180,6 +182,34 @@ CREATE TABLE project (
 `archived_at` implementa RF-F1: el proyecto pasa a histórico de solo lectura. La regla no es un trigger sino un guard de aplicación, porque los trabajos de fondo sí necesitan escribir sobre proyectos archivados (por ejemplo, terminar de subir una foto que se sincronizó tarde).
 
 `site_id` es `NOT NULL` (ADR-013): toda organización tiene al menos un sitio por defecto, creado junto con ella (`organizationHooks.afterCreateOrganization` de better-auth), así que ningún proyecto se crea sin sitio. El fallback de zona horaria de ADR-008 (`organization_profile.timezone` cuando no hay sitio) sigue existiendo como defensa ante un `site_id` null que no debería ocurrir con la columna `NOT NULL`, no como caso de negocio esperado.
+
+`visibility` (ADR-017) decide quién ve el proyecto además de `owner`/`director`: `reserved` (por defecto) solo a sus miembros explícitos y a quien tenga una tarea asignada en él; `site` a cualquiera con acceso al sitio. La migración `0012` agrega la columna con los proyectos que ya existían en `site` (para no cambiar lo que ven) y deja `reserved` como default de los nuevos. **Hasta el PR de comportamiento de ADR-017 nada lee esta columna**: la base la guarda y la audita, pero ninguna policy ni ningún caso de uso la usa todavía. El `CHECK` entró `NOT VALID` y se valida en un despliegue posterior (ver "Migraciones").
+
+```sql
+CREATE TABLE project_member (
+  id                    uuid PRIMARY KEY,
+  organization_id       text NOT NULL,
+  created_at            timestamptz NOT NULL DEFAULT now(),
+  updated_at            timestamptz NOT NULL DEFAULT now(),
+  deleted_at            timestamptz,
+  version               integer NOT NULL DEFAULT 1,
+  created_by_member_id  text NOT NULL,
+  project_id            uuid NOT NULL,
+  member_id             text NOT NULL,
+  FOREIGN KEY (organization_id, project_id) REFERENCES project (organization_id, id)
+);
+
+CREATE UNIQUE INDEX project_member_org_project_member_active_uidx
+  ON project_member (organization_id, project_id, member_id) WHERE deleted_at IS NULL;
+CREATE INDEX project_member_org_member_project_idx
+  ON project_member (organization_id, member_id, project_id) WHERE deleted_at IS NULL;
+```
+
+Miembros explícitos de un proyecto (ADR-017). Sin rol: el rol sale siempre de la organización (ADR-015). Quitar a alguien es `deleted_at` (regla dura 9); con la fila quitada se lo puede volver a agregar. `member_id` no tiene FK (ADR-010). El acceso por asignación **no** se guarda: se deriva de `task.assignee_member_id`, para que al desasignar a alguien pierda el acceso solo.
+
+#### `project_id` copiado en las tablas hijas
+
+Toda tabla que cuelga de una tarea copia su `project_id` (hoy `task_update`; `attachment`, `task_acknowledgement` y, nullable, `notification` y `resource_booking` cuando se creen). Es el mismo criterio que con `organization_id`: "aunque parezca redundante". La base impide que la copia diverja: `task` tiene `UNIQUE (organization_id, id, project_id)` y cada hija una FK compuesta `(organization_id, task_id, project_id)` hacia ahí; un trigger `BEFORE INSERT` (`app_fill_project_id_from_task()`) lo llena si el INSERT no lo trae, que es lo que deja andar al código anterior; y otro, `BEFORE UPDATE` (`app_forbid_project_id_change()`), impide cambiarlo una vez fijado — el proyecto de una tarea no se cambia. Ambos se aplican por catálogo: toda migración que crea una tabla con `project_id` termina con `select app_apply_project_immutability();` y, si además tiene `task_id`, con `select app_apply_project_id_fill();`.
 
 ### Tareas
 
@@ -461,12 +491,15 @@ CREATE TABLE task_update (
   version               integer NOT NULL DEFAULT 1,
   created_by_member_id  text NOT NULL,
   task_id               uuid NOT NULL,
+  project_id            uuid NOT NULL,  -- copia del proyecto de la tarea (ADR-017)
   kind                  text NOT NULL CHECK (kind IN
                           ('comment','status_change','block_report','evidence','system','reopen')),
   body                  text,
   metadata              jsonb NOT NULL DEFAULT '{}',
   edited_at             timestamptz,
-  FOREIGN KEY (organization_id, task_id) REFERENCES task (organization_id, id)
+  FOREIGN KEY (organization_id, task_id) REFERENCES task (organization_id, id),
+  FOREIGN KEY (organization_id, task_id, project_id)
+    REFERENCES task (organization_id, id, project_id)
 );
 ```
 
@@ -513,50 +546,31 @@ CREATE TABLE audit_log (
   entity_type      text NOT NULL,
   entity_id        uuid NOT NULL,
   action           text NOT NULL CHECK (action IN ('insert','update','delete')),
-  actor_member_id  uuid,
+  actor_member_id  text,
   actor_kind       text NOT NULL DEFAULT 'member'
                      CHECK (actor_kind IN ('member','system','guest')),
   changed          jsonb NOT NULL,
   request_id       text,
+  project_id       uuid,
   created_at       timestamptz NOT NULL DEFAULT now()
 ) PARTITION BY RANGE (created_at);
 
-CREATE OR REPLACE FUNCTION audit_trigger() RETURNS trigger AS $$
-DECLARE
-  diff jsonb;
-BEGIN
-  IF TG_OP = 'UPDATE' THEN
-    SELECT jsonb_object_agg(key, jsonb_build_array(to_jsonb(OLD)->key, value))
-      INTO diff
-      FROM jsonb_each(to_jsonb(NEW))
-     WHERE to_jsonb(OLD)->key IS DISTINCT FROM value
-       AND key NOT IN ('updated_at','version');
-    IF diff IS NULL THEN RETURN NEW; END IF;
-  ELSE
-    diff := to_jsonb(COALESCE(NEW, OLD));
-  END IF;
-
-  INSERT INTO audit_log (organization_id, entity_type, entity_id, action,
-                         actor_member_id, changed, request_id)
-  VALUES (COALESCE(NEW, OLD).organization_id, TG_TABLE_NAME,
-          COALESCE(NEW, OLD).id, lower(TG_OP),
-          nullif(current_setting('app.current_member', true), ''),
-          diff, current_setting('app.request_id', true));
-
-  RETURN COALESCE(NEW, OLD);
-END;
-$$ LANGUAGE plpgsql;
+CREATE TRIGGER project_audit
+  AFTER INSERT OR UPDATE OR DELETE ON project
+  FOR EACH ROW EXECUTE FUNCTION audit_trigger();
 
 REVOKE UPDATE, DELETE ON audit_log FROM app_user;
 ```
 
-Tres detalles que hacen que esto sea confiable:
+El `CREATE TABLE` y el trigger de arriba son un resumen; lo que vale es `0012_project_visibility_structure.sql`. `audit_log` se adelantó a `0012` (ADR-017, mismo criterio que `mutation_log` y `task_update`) para que pasar un proyecto de `reserved` a `site` quede registrado; el paso 8 extiende los triggers al resto. `actor_member_id` es `text` (los miembros son `text`, ADR-010; una versión anterior de este documento decía `uuid`), y `project_id` permite filtrar la lectura por proyecto: el trigger lo llena (`project`: su propio `id`; el resto: su `project_id`). La tabla no está en el esquema de Drizzle, que no sabe expresar `PARTITION BY`; la aplicación no la consulta con el query builder.
 
-- El `REVOKE` es lo que vuelve inmutable la tabla. Sin él, "append-only" es una convención que el primer script de limpieza rompe.
+Cuatro detalles que hacen que esto sea confiable:
+
+- El `REVOKE` es lo que vuelve inmutable la tabla, y se repite en **cada partición** (`app_ensure_audit_partitions` lo hace al crearlas): sin eso, quien escribe en una partición por su nombre se saltea el `REVOKE` del padre. Sin él, "append-only" es una convención que el primer script de limpieza rompe.
 - El trigger solo guarda los campos que cambiaron, no la fila entera. Una tabla de tareas con 20 columnas auditada completa crece varias veces más rápido que el dato en sí.
 - `app.current_member` y `app.request_id` los setea el mismo interceptor que setea el contexto de RLS. Un cambio hecho por un worker de fondo queda con `actor_member_id` nulo y `actor_kind = 'system'`, que es correcto y visible.
 
-Se audita: `task`, `project`, `resource_booking`, `member_site_access`, `custom_field_definition`, `guest_link`. No se audita `task_update` ni `notification`, que ya son registros de eventos.
+Se audita: `project` y `project_member` (desde `0012`); a medida que avance el paso 8, `task`, `resource_booking`, `member_site_access`, `custom_field_definition`, `guest_link`. No se audita `task_update` ni `notification`, que ya son registros de eventos.
 
 ## Notificaciones, acuse y escalamiento
 
@@ -700,15 +714,20 @@ migraciones corren como `app_owner`, así que el `FOR ROLE app_owner` es
 obligatorio: sin él, el default queda registrado bajo el rol que ejecutó el
 script a mano y no hace nada útil en producción.
 
-`REVOKE UPDATE, DELETE ON audit_log FROM app_user` va en la migración `audit`
-(011), cuando la tabla existe — no en el bootstrap de roles, que corre antes
+`REVOKE UPDATE, DELETE ON audit_log FROM app_user` va en la migración que crea la
+tabla (`0012`), cuando existe — no en el bootstrap de roles, que corre antes
 de que haya una sola tabla.
+
+Dos roles más (ADR-017), también creados por `bootstrap-roles.sql`:
+
+- `app_worker` (login, hereda de `app_user`, sin `BYPASSRLS`): el usuario de base de los workers y los scripts, distinto de `app_login`. Las funciones auxiliares de RLS por proyecto conceden el privilegio de sistema solo si la sesión se abrió con este usuario (`session_user`).
+- `app_rls_helper` (`NOLOGIN`, `BYPASSRLS`): dueño de esas funciones y de nada más. Es el único rol con `BYPASSRLS`; ningún otro rol puede asumirlo (sin membresías, sin `SET ROLE`). Sus permisos de tabla (solo `SELECT`, solo sobre lo que las funciones leen) los otorga la migración del PR de comportamiento.
 
 Los roles y las extensiones (`btree_gist`, `pg_trgm`, `pgcrypto`, `ltree`) se
 crean en `packages/db/sql/bootstrap-roles.sql`, ejecutado por un superusuario,
 no por una migración de Drizzle: algunas extensiones y la creación de roles
 necesitan privilegios que `app_owner` no tiene, y los passwords de
-`app_owner`/`app_login` no pueden vivir en una migración versionada en git.
+`app_owner`/`app_login`/`app_worker` no pueden vivir en una migración versionada en git.
 
 ### Policy estándar
 
@@ -725,7 +744,7 @@ CREATE POLICY task_tenant_isolation ON task
 
 El `nullif(..., '')` sigue valiendo la pena aunque `organization_id` sea `text` (ADR-010) y ya no haga falta castear nada: la primera vez que una conexión toca un GUC custom como `app.current_org` con `set_config(..., true)`, Postgres registra un placeholder para esa conexión con valor por defecto `''` (no `NULL`). Al terminar esa transacción (commit o rollback), el valor vuelve a `''`, nunca a `NULL`, aunque nunca se hubiera seteado antes en esa conexión. Sin el `nullif`, una transacción de sistema (que no setea `app.current_org`) que reutiliza una conexión del pool ya tocada por una transacción de tenant compara `organization_id = ''` en vez de `organization_id = NULL` — el resultado práctico es el mismo (ninguna fila real tiene `organization_id = ''`, así que sigue sin ver nada), pero `NULL` deja explícito que el contexto está "sin tenant", no "tenant vacío".
 
-La misma policy se aplica a todas las tablas con `organization_id`. Conviene generarla en la migración recorriendo el catálogo, no escribirla 25 veces a mano.
+La misma policy se aplica a todas las tablas con `organization_id`, **también a las particionadas y a cada una de sus particiones** (`app_apply_tenant_policies()` recorre `relkind` `r` y `p` desde `0012`): las policies del padre no se consultan cuando alguien lee una partición por su nombre, así que cada partición lleva las suyas. Conviene generarla en la migración recorriendo el catálogo, no escribirla 25 veces a mano.
 
 ### Cómo se setea el contexto
 
@@ -849,7 +868,7 @@ Regla general: todo índice de una tabla de negocio arranca con `organization_id
 
 ### Particionado
 
-Solo `audit_log`, por rango mensual sobre `created_at`. Es la única tabla que crece de forma no acotada por diseño y cuyo patrón de consulta es casi siempre reciente. Un job mensual crea la partición siguiente y desprende las que superan la retención.
+Solo `audit_log`, por rango mensual sobre `created_at`. Es la única tabla que crece de forma no acotada por diseño y cuyo patrón de consulta es casi siempre reciente. Un job mensual crea la partición siguiente y desprende las que superan la retención. Hasta que ese job exista (paso 8 del brief), `0012` crea las particiones del mes actual y de los doce siguientes más una `DEFAULT`, con `app_ensure_audit_partitions(desde, meses)` (idempotente, la usará el job). **Postgres no deja crear la partición de un mes si la `DEFAULT` ya tiene filas de ese mes** (error `23514`, verificado con un test): el job tiene que sacar esas filas de la `DEFAULT`, crear la partición y reinsertarlas.
 
 El resto no se particiona. Con decenas de tenants y miles de tareas por tenant, Postgres no necesita ayuda; particionar antes de tiempo complica las claves foráneas y las migraciones sin ganancia medible.
 
@@ -978,21 +997,23 @@ slices siguientes contra una conexión que en los hechos ignora las policies.
 | `0009` | `project_site_id_check_not_valid` | `ALTER TABLE project ADD CONSTRAINT ... CHECK (site_id IS NOT NULL) NOT VALID` (ADR-013, primer caso real de la convención NOT VALID + VALIDATE de CLAUDE.md §6) | Hecha |
 | `0010` | `project_site_id_not_null_validate` | `VALIDATE CONSTRAINT` + `ALTER COLUMN site_id SET NOT NULL` + `DROP` el CHECK temporal de `0009`, en despliegue separado (ADR-013) | Hecha |
 | `0011` | `member_site_access_drop_role` | `DROP COLUMN role` de `member_site_access` (ADR-015: la tabla significa solo "este miembro trabaja en este sitio", el rol sale de la organización). Excepción razonada a la regla 7: ningún código la usó nunca y la tabla está vacía | Hecha |
-| `0012` | `templates` | `sop_template`, `sop_template_task` | Pendiente |
-| `0013` | `custom_fields` | `custom_field_definition`, índices GIN | Pendiente |
-| `0014` | `resources` | `resource`, `resource_booking` con la exclusion constraint | Pendiente |
-| `0015` | `dependencies` | `task_dependency`, función anti-ciclos, `schedule_change` | Pendiente |
-| `0016` | `collaboration` (resto) | `attachment`, `task_acknowledgement` | Pendiente |
-| `0017` | `audit` | `audit_log` particionada, `audit_trigger()`, `REVOKE` | Pendiente |
-| `0018` | `notifications` | `notification`, `notification_preference`, `escalation_policy` | Pendiente |
-| `0019` | `sync` | Publicación lógica, `wal_level` (ya no `mutation_log`, adelantada a `0004`) | Pendiente |
-| `0020` | `billing` | `plan`, `subscription`, `payment_event`, `usage_counter` | Pendiente |
-| `0021` | `analytics` | `project_kpi` materializada y su job de refresco | Pendiente |
-| `0022` | `seed` | Planes, plantillas SOP por industria, catálogos iniciales | Pendiente |
+| `0012` | `project_visibility_structure` | ADR-017, PR de estructura: `project.visibility`, `project_member`, `task_update.project_id` (nullable + `CHECK ... NOT VALID` + FK compuesta `NOT VALID`; trigger que lo llena), `UNIQUE (organization_id, id, project_id)` en `task`, inmutabilidad de `project_id`, `audit_log` particionada (mes actual + 12 + `DEFAULT`) con triggers de `project`/`project_member`, `app_apply_tenant_policies()` también para tablas particionadas. No cambia comportamiento. Los roles `app_worker`/`app_rls_helper` van en `bootstrap-roles.sql`, no en una migración | Hecha |
+| `0013` | `project_visibility_validate` | `VALIDATE CONSTRAINT` de `project_visibility_check`, de la FK compuesta y del `CHECK` de `task_update.project_id`, `SET NOT NULL` y `DROP` del `CHECK` temporal. Despliegue posterior a `0012`, **nunca en la misma corrida del migrador** (CLAUDE.md §6). Se escribe a mano: `drizzle-kit generate` no ve diferencia porque el esquema ya declara el estado final | Pendiente |
+| `0014` | `templates` | `sop_template`, `sop_template_task` | Pendiente |
+| `0015` | `custom_fields` | `custom_field_definition`, índices GIN | Pendiente |
+| `0016` | `resources` | `resource`, `resource_booking` con la exclusion constraint | Pendiente |
+| `0017` | `dependencies` | `task_dependency`, función anti-ciclos, `schedule_change` | Pendiente |
+| `0018` | `collaboration` (resto) | `attachment`, `task_acknowledgement` | Pendiente |
+| `0019` | `audit` | Resto del audit trail del paso 8: triggers de `task` y demás, job de particiones y retención. `audit_log` y `audit_trigger()` ya existen desde `0012` | Pendiente |
+| `0020` | `notifications` | `notification`, `notification_preference`, `escalation_policy` | Pendiente |
+| `0021` | `sync` | Publicación lógica, `wal_level` (ya no `mutation_log`, adelantada a `0004`) | Pendiente |
+| `0022` | `billing` | `plan`, `subscription`, `payment_event`, `usage_counter` | Pendiente |
+| `0023` | `analytics` | `project_kpi` materializada y su job de refresco | Pendiente |
+| `0024` | `seed` | Planes, plantillas SOP por industria, catálogos iniciales | Pendiente |
 
 `0009`/`0010` (site_id obligatorio, ADR-013) no estaban en el plan original — se adelantan por la misma razón que `mutation_log` y `task_update`: el alcance por sitio, que sigue en fase 2, necesita la columna cerrada primero. Corrieron ellas dos en el lugar de `templates`/`custom_fields`, que se corren un lugar cada una.
 
-`0000` a `0016` son la v1. `0017` a `0022` acompañan las fases posteriores, pero conviene escribirlas al mismo tiempo para que el esquema quede coherente de entrada.
+`0000` a `0018` son la v1. `0019` a `0024` acompañan las fases posteriores, pero conviene escribirlas al mismo tiempo para que el esquema quede coherente de entrada.
 
 Regla de operación: ninguna migración hace `DROP COLUMN` en el mismo despliegue que deja de usarla. Primero se deja de escribir, se despliega, se verifica, y recién en un despliegue posterior se borra. Con clientes en el campo que corren versiones viejas de la app móvil, esa disciplina es lo que evita cortes. La única excepción hecha hasta ahora es `0011` (ADR-015): una columna que ningún código leyó ni escribió nunca, en una tabla vacía; no sienta precedente para una columna que el código sí usa.
 
