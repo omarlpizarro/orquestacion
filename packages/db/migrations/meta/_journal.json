@@ -92,6 +92,27 @@
       "when": 1790982279717,
       "tag": "0012_project_visibility_structure",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1791052838338,
+      "tag": "0013_validate_project_visibility_structure",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1791053108861,
+      "tag": "0014_task_assignee_project_index",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1791053116439,
+      "tag": "0015_project_visibility_behavior",
+      "breakpoints": true
     }
   ]
 }

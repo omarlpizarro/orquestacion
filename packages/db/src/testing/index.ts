@@ -1,3 +1,4 @@
+export { insertAuthMember, insertAuthOrganization } from './auth-fixtures.js';
 export { type PostgresHarness, startPostgresHarness } from './postgres-harness.js';
 export {
   type ScannerExecutor,

@@ -7,10 +7,12 @@ import { CreateTaskController } from './features/create-task/create-task.control
 import { CreateTaskHandler } from './features/create-task/create-task.handler.js';
 import { MyDayController } from './features/my-day/my-day.controller.js';
 import { MyDayHandler } from './features/my-day/my-day.handler.js';
+import { ProjectAccessService } from './project-access.service.js';
 
 @Module({
   imports: [TenancyModule, CollaborationModule],
   controllers: [CreateTaskController, ChangeTaskStatusController, MyDayController],
-  providers: [CreateTaskHandler, ChangeTaskStatusHandler, MyDayHandler],
+  providers: [CreateTaskHandler, ChangeTaskStatusHandler, MyDayHandler, ProjectAccessService],
+  exports: [ProjectAccessService],
 })
 export class ProjectsModule {}

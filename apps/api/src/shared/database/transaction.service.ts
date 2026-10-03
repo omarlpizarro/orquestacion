@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { Db } from '@orq/db';
-import { type Tx, withSystemTransaction, withTenantTransaction } from '@orq/db';
+import { type Tx, withoutTenantTransaction, withTenantTransaction } from '@orq/db';
 import { getRequestContext } from '../request-context/request-context.js';
 import { DB } from './database.tokens.js';
 
@@ -28,8 +28,13 @@ export class TransactionService {
     return withTenantTransaction(this.db, { ...tenant, requestId }, handler);
   }
 
-  withSystem<T>(handler: (tx: Tx) => Promise<T>): Promise<T> {
+  /**
+   * Sin organización: no ve ninguna fila de tenant. No es el contexto de
+   * sistema de ADR-017 (ese vive en `@orq/db/system` y no se importa desde la
+   * ruta de requests).
+   */
+  withoutTenant<T>(handler: (tx: Tx) => Promise<T>): Promise<T> {
     const { requestId } = getRequestContext();
-    return withSystemTransaction(this.db, { requestId }, handler);
+    return withoutTenantTransaction(this.db, { requestId }, handler);
   }
 }

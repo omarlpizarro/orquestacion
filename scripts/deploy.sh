@@ -105,6 +105,13 @@ set -a
 set +a
 api_port="${API_HOST_PORT:-18020}"
 
+# Obligatoria desde ADR-017 (usuario de base de los workers). Vacía o ausente es
+# un error de configuración: mejor frenar acá, antes de tocar nada, que
+# descubrirlo cuando falle una conexión. Va aparte del chequeo de CHANGE_ME
+# porque una variable que falta no tiene ninguna línea que grep pueda encontrar.
+[ -n "${APP_WORKER_PASSWORD:-}" ] \
+  || die "APP_WORKER_PASSWORD está vacía o falta en $env_file. Generala con: openssl rand -hex 32"
+
 # Servidor compartido: si el puerto ya lo usa algo, tiene que ser nuestra propia API.
 if ss -ltnH "sport = :$api_port" | grep -q .; then
   if [ -z "$("$compose" ps -q api 2>/dev/null)" ]; then

@@ -8,8 +8,8 @@ import { AssigneeNotAssignableError } from '../../domain/errors/assignee-not-ass
 import { ParentTaskNotFoundError } from '../../domain/errors/parent-task-not-found.error.js';
 import { ProjectNotFoundError } from '../../domain/errors/project-not-found.error.js';
 import { TaskCreateForbiddenError } from '../../domain/errors/task-create-forbidden.error.js';
+import { TaskCreateProjectAccessError } from '../../domain/errors/task-create-project-access.error.js';
 import { TaskDepthExceededError } from '../../domain/errors/task-depth-exceeded.error.js';
-import { TaskSiteAccessForbiddenError } from '../../domain/errors/task-site-access-forbidden.error.js';
 import {
   findLastSiblingPosition,
   findParentTaskForTenant,
@@ -18,6 +18,7 @@ import {
   insertTask,
   type TaskRow,
 } from '../../infrastructure/task.repository.js';
+import type { ProjectAccessService } from '../../project-access.service.js';
 import type { CreateTaskCommand } from './create-task.command.js';
 import { CreateTaskHandler } from './create-task.handler.js';
 
@@ -64,16 +65,31 @@ const insertedTask: TaskRow = {
 
 const siteId = '01945f4e-0000-7000-8000-0000000000aa';
 
-function buildHandler(options: { canAccessSite?: boolean; isMemberAssignable?: boolean } = {}) {
+function buildHandler(
+  options: {
+    hasFullAccess?: boolean;
+    isMemberAssignable?: boolean;
+    isExplicitMember?: boolean;
+    isMemberInOrganization?: boolean;
+  } = {},
+) {
   const withTenant = vi.fn(async (fn: (tx: unknown) => unknown) => fn({}));
   const transactions = { withTenant } as unknown as TransactionService;
   const tenancy = {
     resolveTimezone: vi.fn().mockResolvedValue('America/Argentina/Buenos_Aires'),
-    canAccessSite: vi.fn().mockResolvedValue(options.canAccessSite ?? true),
     isMemberAssignable: vi.fn().mockResolvedValue(options.isMemberAssignable ?? true),
+    isMemberInOrganization: vi.fn().mockResolvedValue(options.isMemberInOrganization ?? true),
   };
-  const handler = new CreateTaskHandler(transactions, tenancy as unknown as TenancyService);
-  return Object.assign(handler, { tenancyMock: tenancy });
+  const projectAccess = {
+    hasFullAccess: vi.fn().mockResolvedValue(options.hasFullAccess ?? true),
+    isExplicitMember: vi.fn().mockResolvedValue(options.isExplicitMember ?? false),
+  };
+  const handler = new CreateTaskHandler(
+    transactions,
+    tenancy as unknown as TenancyService,
+    projectAccess as unknown as ProjectAccessService,
+  );
+  return Object.assign(handler, { tenancyMock: tenancy, projectAccessMock: projectAccess });
 }
 
 function run<T>(command: CreateTaskCommand, handler: CreateTaskHandler): Promise<T> {
@@ -227,7 +243,7 @@ describe('CreateTaskHandler', () => {
     expect(result.id).toBe(insertedTask.id);
   });
 
-  it('un manager con acceso al sitio del proyecto crea la tarea; canAccessSite recibe su rol y el sitio', async () => {
+  it('con acceso completo al proyecto crea la tarea; la pregunta de acceso la responde la base', async () => {
     const handler = buildHandler();
     const manager = { ...tenant, role: 'manager' };
 
@@ -235,24 +251,37 @@ describe('CreateTaskHandler', () => {
       handler.execute(baseCommand),
     );
 
-    expect(handler.tenancyMock.canAccessSite).toHaveBeenCalledWith(
+    expect(handler.projectAccessMock.hasFullAccess).toHaveBeenCalledWith(
       {},
-      { organizationId: tenant.organizationId, memberId: tenant.memberId, role: 'manager', siteId },
+      { projectId: baseCommand.project_id },
     );
     expect(insertTask).toHaveBeenCalled();
   });
 
-  it('un manager sin acceso al sitio del proyecto rechaza con TaskSiteAccessForbiddenError y no inserta ni registra la mutación', async () => {
-    const handler = buildHandler({ canAccessSite: false });
+  it('quien ve el proyecto solo por una tarea asignada rechaza con TaskCreateProjectAccessError y no inserta ni registra la mutación', async () => {
+    const handler = buildHandler({ hasFullAccess: false });
     const manager = { ...tenant, role: 'manager' };
 
     await expect(
       runWithRequestContext({ requestId: 'req-1', tenant: manager }, () =>
         handler.execute(baseCommand),
       ),
-    ).rejects.toBeInstanceOf(TaskSiteAccessForbiddenError);
+    ).rejects.toBeInstanceOf(TaskCreateProjectAccessError);
     expect(insertTask).not.toHaveBeenCalled();
     expect(recordMutation).not.toHaveBeenCalled();
+  });
+
+  it('orden 404 → 403: un operator que no ve el proyecto recibe 404, no el 403 de su rol', async () => {
+    vi.mocked(findProjectForTenant).mockResolvedValue(null);
+    const handler = buildHandler();
+    const operator = { ...tenant, role: 'operator' };
+
+    await expect(
+      runWithRequestContext({ requestId: 'req-1', tenant: operator }, () =>
+        handler.execute(baseCommand),
+      ),
+    ).rejects.toBeInstanceOf(ProjectNotFoundError);
+    expect(handler.projectAccessMock.hasFullAccess).not.toHaveBeenCalled();
   });
 
   it('valida assignee_member_id con isMemberAssignable sobre el sitio del proyecto', async () => {
@@ -268,6 +297,38 @@ describe('CreateTaskHandler', () => {
       {},
       expect.objectContaining({ assigneeMemberId: 'member_assignee' }),
     );
+  });
+
+  it('asigna a un miembro explícito del proyecto aunque no tenga acceso al sitio (ADR-017 §8)', async () => {
+    const handler = buildHandler({ isMemberAssignable: false, isExplicitMember: true });
+
+    await run({ ...baseCommand, assignee_member_id: 'member_explicito' }, handler);
+
+    expect(handler.projectAccessMock.isExplicitMember).toHaveBeenCalledWith(
+      {},
+      {
+        organizationId: tenant.organizationId,
+        projectId: baseCommand.project_id,
+        memberId: 'member_explicito',
+      },
+    );
+    expect(insertTask).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({ assigneeMemberId: 'member_explicito' }),
+    );
+  });
+
+  it('no asigna a quien figura en project_member pero ya no es de la organización', async () => {
+    const handler = buildHandler({
+      isMemberAssignable: false,
+      isExplicitMember: true,
+      isMemberInOrganization: false,
+    });
+
+    await expect(
+      run({ ...baseCommand, assignee_member_id: 'member_ido' }, handler),
+    ).rejects.toBeInstanceOf(AssigneeNotAssignableError);
+    expect(insertTask).not.toHaveBeenCalled();
   });
 
   it('rechaza con AssigneeNotAssignableError si el asignado no es de la organización o no trabaja en el sitio', async () => {

@@ -1,7 +1,6 @@
 import { ORG_ROLES, type OrgRole } from '../../../shared/auth/org-role.js';
 import { InvalidTaskStatusTransitionError } from './errors/invalid-task-status-transition.error.js';
 import { ReasonRequiredError } from './errors/reason-required.error.js';
-import { TaskSiteAccessForbiddenError } from './errors/task-site-access-forbidden.error.js';
 import { TaskStatusTransitionForbiddenError } from './errors/task-status-transition-forbidden.error.js';
 import { TaskStatusTransitionRequiresAssigneeError } from './errors/task-status-transition-requires-assignee.error.js';
 import type { ReasonKind, TaskStatus } from './task-status.js';
@@ -51,10 +50,12 @@ export interface TaskStatusTransition {
  * con `blocked ⇄ in_progress`, y ahora `pending → blocked` directo para el
  * caso de campo más común: no se puede ni arrancar) lo ejecuta cualquier
  * rol — pero cuando ese rol es `operator`, solo sobre una tarea de la que
- * es asignado, o sin asignar en un sitio suyo y solo hacia `blocked`
+ * es asignado, o sin asignar y que ve por acceso completo al proyecto (miembro
+ * explícito, o proyecto abierto a su sitio) y solo hacia `blocked`
  * (`canOperatorActOnTask`, CLAUDE.md §7: nivel 3 es "sus tareas y su sitio",
- * no cualquier tarea de la organización). Un `manager` solo actúa en sus
- * sitios (`hasSiteAccess`, ADR-015).
+ * no cualquier tarea de la organización). El alcance de un `manager` ya no se
+ * decide acá: lo que no ve, la base se lo oculta y el caso de uso responde 404
+ * antes de llegar a este dominio (ADR-017 §6).
  *
  * Cancelar y resolver una revisión (`in_review → in_progress` o `→ done`)
  * quedan reservados a `MANAGEMENT_ROLES`: cancelar es una decisión de
@@ -206,12 +207,14 @@ export interface TaskStatusTransitionRequest {
    */
   readonly isAssignee?: boolean | undefined;
   /**
-   * Resultado de `TenancyService.canAccessSite` para quien pide la
-   * transición, sobre el sitio del proyecto de la tarea. Obligatorio, sin
-   * default: un llamador que olvide resolverlo no compila, en vez de dejar
-   * pasar a todos. El dominio no consulta la base.
+   * `true` si quien pide la transición tiene acceso completo al proyecto de la
+   * tarea (miembro explícito, proyecto abierto a su sitio, o `owner`/`director`),
+   * a diferencia de verla solo porque se la asignaron. Lo resuelve la base
+   * (`app_has_full_project_access`, ADR-017). Obligatorio, sin default: un
+   * llamador que olvide resolverlo no compila, en vez de dejar pasar a todos.
+   * El dominio no consulta la base.
    */
-  readonly hasSiteAccess: boolean;
+  readonly hasFullProjectAccess: boolean;
   /** `true` cuando la tarea no tiene `assignee_member_id`. Solo cuenta para `operator`. */
   readonly isUnassigned: boolean;
   /** Motivo exigido cuando `transition.requiresReason` no es `null` (ver ese campo). */
@@ -232,13 +235,14 @@ export interface ResolvedTaskStatusTransition extends TaskStatusTransition {
 
 /**
  * CLAUDE.md §7, nivel 3: un operator actúa sobre las tareas que tiene
- * asignadas. La única excepción es una tarea sin asignar de un sitio donde
- * trabaja, y ahí solo puede marcarla como bloqueada: el caso de campo en que
- * alguien ve que no se puede ni arrancar y no hay nadie a quien avisarle.
+ * asignadas. La única excepción es una tarea sin asignar de un proyecto en el
+ * que participa con acceso completo (ADR-017 §7), y ahí solo puede marcarla
+ * como bloqueada: el caso de campo en que alguien ve que no se puede ni
+ * arrancar y no hay nadie a quien avisarle.
  */
 function canOperatorActOnTask(request: TaskStatusTransitionRequest): boolean {
   if (request.isAssignee) return true;
-  return request.hasSiteAccess && request.isUnassigned && request.to === 'blocked';
+  return request.hasFullProjectAccess && request.isUnassigned && request.to === 'blocked';
 }
 
 /**
@@ -255,19 +259,11 @@ function canOperatorActOnTask(request: TaskStatusTransitionRequest): boolean {
  * transición misma, así que no hay "rol permitido" que evaluar para un par
  * `(from, to)` que no está en la tabla. Recién con la transición en mano
  * tiene sentido preguntar por rol, después por asignación (para `operator`,
- * CLAUDE.md §7) y por último por el motivo, si esa transición lo exige. El
- * acceso al sitio de un rol que no es `operator` va antes que todo.
+ * CLAUDE.md §7) y por último por el motivo, si esa transición lo exige.
  */
 export function resolveTaskStatusTransition(
   request: TaskStatusTransitionRequest,
 ): ResolvedTaskStatusTransition {
-  // Antes de mirar la matriz, a propósito: fuera de su sitio un manager no
-  // puede nada sobre la tarea, ni siquiera enterarse de qué transiciones
-  // existen. Para operator el acceso al sitio no corta acá sino en la regla
-  // de asignación, porque ser el asignado alcanza sin él.
-  if (request.role !== 'operator' && !request.hasSiteAccess) {
-    throw new TaskSiteAccessForbiddenError();
-  }
   const transition = findTaskStatusTransition(request.from, request.to);
   if (!transition) {
     throw new InvalidTaskStatusTransitionError(request.from, request.to);

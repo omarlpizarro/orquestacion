@@ -13,7 +13,7 @@ interface HealthRow extends Record<string, unknown> {
 }
 
 /**
- * No recibe un tenant falso: corre por `withSystem`, que deliberadamente no
+ * No recibe un tenant falso: corre por `withoutTenant`, que deliberadamente no
  * setea `app.current_org`. Así, un `DATABASE_URL` apuntando al dueño del
  * esquema (en vez de a `app_login`) pone este check en rojo el día uno, no
  * en el mes seis.
@@ -28,7 +28,7 @@ export class GetHealthHandler {
   async execute(): Promise<HealthOutput> {
     const { requestId } = getRequestContext();
 
-    const row = await this.transactions.withSystem(async (tx) => {
+    const row = await this.transactions.withoutTenant(async (tx) => {
       const result = await tx.execute<HealthRow>(sql`
         select
           current_user as connected_as,

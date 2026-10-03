@@ -15,7 +15,6 @@ import {
   CollaborationService,
   type TaskUpdateKind,
 } from '../../../collaboration/collaboration.module.js';
-import { TenancyService } from '../../../tenancy/tenancy.module.js';
 import { TaskNotFoundError } from '../../domain/errors/task-not-found.error.js';
 import { TaskVersionMismatchError } from '../../domain/errors/task-version-mismatch.error.js';
 import {
@@ -25,11 +24,11 @@ import {
 } from '../../domain/task-status-transitions.js';
 import {
   findTaskById,
-  findTaskWithSiteById,
   type TaskRow,
   updateTaskStatus,
 } from '../../infrastructure/task.repository.js';
 import { toTaskOutput } from '../../infrastructure/task-output.mapper.js';
+import { ProjectAccessService } from '../../project-access.service.js';
 import type { ChangeTaskStatusCommand } from './change-task-status.command.js';
 
 /**
@@ -50,7 +49,7 @@ export class ChangeTaskStatusHandler {
   constructor(
     private readonly transactions: TransactionService,
     private readonly collaboration: CollaborationService,
-    private readonly tenancy: TenancyService,
+    private readonly projectAccess: ProjectAccessService,
   ) {}
 
   async execute(command: ChangeTaskStatusCommand): Promise<TaskOutput> {
@@ -118,17 +117,17 @@ export class ChangeTaskStatusHandler {
       if (existing) return { task: existing, fromStatus: null };
     }
 
-    const current = await findTaskWithSiteById(tx, {
+    // Orden fijo de ADR-017 §6: 404 → 403 → 409. RLS devuelve "no existe" para
+    // una tarea que quien pide no ve (proyecto reservado ajeno, tarea de otro
+    // en un proyecto donde solo está asignado), igual que si no existiera.
+    const current = await findTaskById(tx, {
       organizationId: tenant.organizationId,
       taskId: command.id,
     });
     if (!current) throw new TaskNotFoundError(command.id);
     const role = parseSingleOrgRole(tenant.role);
-    const hasSiteAccess = await this.tenancy.canAccessSite(tx, {
-      organizationId: tenant.organizationId,
-      memberId: tenant.memberId,
-      role,
-      siteId: current.siteId,
+    const hasFullProjectAccess = await this.projectAccess.hasFullAccess(tx, {
+      projectId: current.projectId,
     });
 
     const transition = resolveTaskStatusTransition({
@@ -137,7 +136,7 @@ export class ChangeTaskStatusHandler {
       role,
       isAssignee: current.assigneeMemberId === tenant.memberId,
       isUnassigned: current.assigneeMemberId === null,
-      hasSiteAccess,
+      hasFullProjectAccess,
       reason: command.reason,
     });
 

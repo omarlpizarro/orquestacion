@@ -43,7 +43,10 @@ Estas no se negocian y no se preguntan. Violarlas es un bug, no una opción de d
    `BYPASSRLS` (ADR-017): es `NOLOGIN`, dueño de las funciones auxiliares de RLS
    por proyecto y de nada más, y ningún otro rol puede asumirlo (sin membresías,
    sin `SET ROLE`). La aplicación nunca se conecta con él ni lo usa; un metatest
-   verifica que sigue así.
+   verifica que sigue así. Las migraciones no pueden hacerle dueño de nada por
+   su cuenta: el traspaso de cada función lo hace un puente del superusuario
+   (`ensure-roles.sql`) con una lista fija; sumar una función exige modificar
+   ese archivo y volver a correrlo (ADR-017).
 5. **Ningún módulo consulta tablas de otro módulo.** Se comunican por servicios
    exportados y eventos in-process. Ver sección 5.
 6. **Los IDs son UUIDv7 generados en el cliente**, no `gen_random_uuid()` del lado
@@ -204,11 +207,20 @@ Detalle completo en `docs/data-model.md`. Lo mínimo que tenés que respetar sie
 - Toda migración que crea una tabla de negocio nueva termina con
   `select app_apply_tenant_policies();` **y** `select app_apply_version_triggers();`
   (y, si la tabla tiene `project_id`, `select app_apply_project_immutability();`;
-  si además tiene `task_id`, `select app_apply_project_id_fill();` — ADR-017)
+  si además tiene `task_id`, `select app_apply_project_id_fill();` **y**
+  `select app_apply_project_policies();` — ADR-017)
   (las funciones viven en migraciones ya aplicadas — `0001_roles_rls`,
-  `0005_projects` y `0012_project_visibility_structure`, ver
-  `packages/db/migrations/`). Todas son idempotentes: cubren la tabla
+  `0005_projects`, `0012_project_visibility_structure` y
+  `0015_project_visibility_behavior`, ver `packages/db/migrations/`). Todas son idempotentes: cubren la tabla
   nueva sin tener que escribir la policy o los triggers a mano.
+- **Toda función `SECURITY DEFINER` lleva `SET search_path = pg_catalog, public,
+  pg_temp` y califica con su esquema cada tabla y función que usa**
+  (`public.project_member`, `auth.member`). Sin `pg_temp` explícito, Postgres
+  busca primero en el esquema temporal para las relaciones, y una tabla
+  temporal de la sesión que llama se interpone: con una función de
+  `BYPASSRLS` eso es una fuga (ADR-017). El puente de `ensure-roles.sql`
+  rechaza traspasar una función con otro `search_path`, y el metatest de
+  `rls-helper-role` falla si una `SECURITY DEFINER` de `public` no lo cumple.
 - **Las migraciones solo agregan; nunca rompen lo que usa el código anterior.**
   Cada migración tiene que dejar funcionando la versión del código que estaba
   desplegada *antes* de ella, por dos motivos: entre el paso de migraciones y

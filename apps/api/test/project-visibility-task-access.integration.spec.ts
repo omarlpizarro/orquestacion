@@ -16,13 +16,18 @@ import { getDefaultSiteId } from './helpers/get-default-site-id.js';
 import { signUpAndCreateOrg } from './helpers/sign-up-and-create-org.js';
 
 /**
- * Alcance por sitio (ADR-015, ADR-016) de punta a punta contra Postgres real
- * con `app_login`: create-task, change-task-status y la validación de a quién
- * se le puede asignar. La organización tiene dos sitios *antes* de que se
- * agregue ningún miembro, así que el otorgamiento automático de un solo sitio
- * (ADR-016) no regala filas: cada acceso de este archivo es explícito.
+ * Visibilidad de proyectos (ADR-017) y alcance por sitio (ADR-015, ADR-016) de
+ * punta a punta contra Postgres real con `app_login`: create-task,
+ * change-task-status y la validación de a quién se le puede asignar. La
+ * organización tiene dos sitios *antes* de que se agregue ningún miembro, así
+ * que el otorgamiento automático de un solo sitio (ADR-016) no regala filas:
+ * cada acceso de este archivo es explícito.
+ *
+ * Quien no ve un recurso recibe 404, igual que si no existiera; quien lo ve y no
+ * puede, 403 (ADR-017 §6). Los proyectos de la primera parte son abiertos al
+ * sitio (`visibility = 'site'`); la segunda parte cubre uno reservado.
  */
-describe('alcance por sitio sobre tareas (integración)', () => {
+describe('visibilidad de proyectos sobre tareas (integración)', () => {
   let harness: PostgresHarness;
   let app: NestFastifyApplication;
   let auth: Auth;
@@ -35,6 +40,7 @@ describe('alcance por sitio sobre tareas (integración)', () => {
   let siteB: string;
   let projectA: string;
   let projectB: string;
+  let reservedProject: string;
 
   let director: MemberWithRole;
   let managerA: MemberWithRole; // fila en el sitio A
@@ -72,8 +78,9 @@ describe('alcance por sitio sobre tareas (integración)', () => {
       `),
     );
 
-    projectA = await insertProject(siteA, 'PRY-A');
-    projectB = await insertProject(siteB, 'PRY-B');
+    projectA = await insertProject(siteA, 'PRY-A', 'site');
+    projectB = await insertProject(siteB, 'PRY-B', 'site');
+    reservedProject = await insertProject(siteA, 'PRY-R', 'reserved');
 
     director = await addMemberWithRole(app, auth, {
       organizationId,
@@ -129,15 +136,28 @@ describe('alcance por sitio sobre tareas (integración)', () => {
     );
   }
 
-  async function insertProject(siteId: string, code: string): Promise<string> {
+  async function insertProject(
+    siteId: string,
+    code: string,
+    visibility: 'site' | 'reserved',
+  ): Promise<string> {
     const id = newId();
     await inOrganization((tx) =>
       tx.execute(sql`
-        insert into project (id, organization_id, site_id, created_by_member_id, code, name)
-        values (${id}, ${organizationId}, ${siteId}, ${ownerMemberId}, ${code}, ${code})
+        insert into project (id, organization_id, site_id, created_by_member_id, code, name, visibility)
+        values (${id}, ${organizationId}, ${siteId}, ${ownerMemberId}, ${code}, ${code}, ${visibility})
       `),
     );
     return id;
+  }
+
+  function addProjectMember(projectId: string, memberId: string) {
+    return inOrganization((tx) =>
+      tx.execute(sql`
+        insert into project_member (id, organization_id, created_by_member_id, project_id, member_id)
+        values (${newId()}, ${organizationId}, ${ownerMemberId}, ${projectId}, ${memberId})
+      `),
+    );
   }
 
   function grantAccess(memberId: string, siteId: string) {
@@ -209,21 +229,21 @@ describe('alcance por sitio sobre tareas (integración)', () => {
       expect(response.statusCode, response.body).toBe(200);
     });
 
-    it('un manager con acceso al sitio A no crea en un proyecto del sitio B, y no queda ninguna fila', async () => {
+    it('un manager con acceso al sitio A no ve el proyecto del sitio B: 404, y no queda ninguna fila', async () => {
       const title = 'Tarea que no debe existir (manager, sitio B)';
 
       const response = await createTask(managerA.cookie, { project_id: projectB, title });
 
-      expect(response.statusCode).toBe(403);
-      expect(response.json().data).toMatchObject({ domain_code: 'task_site_access_forbidden' });
+      expect(response.statusCode).toBe(404);
+      expect(response.json().data).toMatchObject({ domain_code: 'project_not_found' });
       expect(await countTasksWithTitle(title)).toBe(0);
     });
 
-    it('un manager sin ninguna fila no crea en ningún sitio', async () => {
+    it('un manager sin ninguna fila no ve ningún proyecto abierto al sitio: 404', async () => {
       const response = await createTask(managerNone.cookie, { project_id: projectA });
 
-      expect(response.statusCode).toBe(403);
-      expect(response.json().data).toMatchObject({ domain_code: 'task_site_access_forbidden' });
+      expect(response.statusCode).toBe(404);
+      expect(response.json().data).toMatchObject({ domain_code: 'project_not_found' });
     });
 
     it('owner y director crean en cualquier sitio sin necesitar una fila (acceso implícito)', async () => {
@@ -243,7 +263,7 @@ describe('alcance por sitio sobre tareas (integración)', () => {
       const payload = { project_id: projectB, client_mutation_id: newId(), id: newId() };
 
       const denied = await createTask(lateManager.cookie, payload);
-      expect(denied.statusCode).toBe(403);
+      expect(denied.statusCode).toBe(404);
 
       await grantAccess(lateManager.memberId, siteB);
       const retried = await createTask(lateManager.cookie, payload);
@@ -329,13 +349,14 @@ describe('alcance por sitio sobre tareas (integración)', () => {
   });
 
   describe('change-task-status: matriz rol × acceso × asignación', () => {
-    type Outcome = 'allowed' | 'site_access' | 'requires_assignee';
+    type Outcome = 'allowed' | 'not_found' | 'requires_assignee';
     type Assignment = 'mine' | 'unassigned' | 'other';
 
     /**
-     * Escrita a mano a partir de las decisiones del 2026-09-29, no copiada de
-     * la implementación: manager fuera de sus sitios no puede nada; operator
-     * actúa en lo suyo, y en lo sin asignar de su sitio solo hacia blocked.
+     * Escrita a mano a partir de las decisiones de ADR-017, no copiada de la
+     * implementación. Quien no ve la tarea recibe 404; ser el asignado la hace
+     * visible aunque no tenga el sitio; el operator actúa en lo suyo, y en lo
+     * sin asignar de un proyecto que ve completo solo hacia blocked.
      */
     function expectedOutcome(
       role: string,
@@ -344,9 +365,10 @@ describe('alcance por sitio sobre tareas (integración)', () => {
       to: string,
     ): Outcome {
       if (role === 'owner' || role === 'director') return 'allowed';
-      if (role === 'manager') return hasAccess ? 'allowed' : 'site_access';
       if (assignment === 'mine') return 'allowed';
-      if (assignment === 'unassigned' && hasAccess && to === 'blocked') return 'allowed';
+      if (!hasAccess) return 'not_found';
+      if (role === 'manager') return 'allowed';
+      if (assignment === 'unassigned' && to === 'blocked') return 'allowed';
       return 'requires_assignee';
     }
 
@@ -370,7 +392,7 @@ describe('alcance por sitio sobre tareas (integración)', () => {
       for (const assignment of ['mine', 'unassigned', 'other'] as const) {
         for (const to of ['in_progress', 'blocked'] as const) {
           const outcome = expectedOutcome(role, hasAccess, assignment, to);
-          it(`${role} ${hasAccess ? 'con' : 'sin'} acceso, tarea ${assignment}, pending -> ${to}: ${outcome}`, async () => {
+          it(`${role} ${hasAccess ? 'con' : 'sin'} acceso al sitio, tarea ${assignment}, pending -> ${to}: ${outcome}`, async () => {
             const who = actor(role, hasAccess);
             const assigneeMemberId =
               assignment === 'mine'
@@ -391,11 +413,11 @@ describe('alcance por sitio sobre tareas (integración)', () => {
               expect(response.json()).toMatchObject({ status: to, version: task.version + 1 });
               return;
             }
-            expect(response.statusCode, response.body).toBe(403);
+            expect(response.statusCode, response.body).toBe(outcome === 'not_found' ? 404 : 403);
             expect(response.json().data).toMatchObject({
               domain_code:
-                outcome === 'site_access'
-                  ? 'task_site_access_forbidden'
+                outcome === 'not_found'
+                  ? 'task_not_found'
                   : 'task_status_transition_requires_assignee',
             });
             const unchanged = await inOrganization((tx) =>
@@ -407,7 +429,7 @@ describe('alcance por sitio sobre tareas (integración)', () => {
       }
     }
 
-    it('un manager con acceso solo al sitio A no cambia el estado de una tarea del sitio B', async () => {
+    it('un manager con acceso solo al sitio A no ve una tarea del sitio B: 404', async () => {
       const task = await insertTask({ projectId: projectB, assigneeMemberId: null });
 
       const response = await changeStatus(managerA.cookie, task.id, {
@@ -415,11 +437,11 @@ describe('alcance por sitio sobre tareas (integración)', () => {
         expected_version: task.version,
       });
 
-      expect(response.statusCode).toBe(403);
-      expect(response.json().data).toMatchObject({ domain_code: 'task_site_access_forbidden' });
+      expect(response.statusCode).toBe(404);
+      expect(response.json().data).toMatchObject({ domain_code: 'task_not_found' });
     });
 
-    it('un manager sin acceso con una versión vieja recibe 403 y no 409', async () => {
+    it('orden 404 → 403 → 409: quien no ve la tarea recibe 404 aunque mande una versión vieja', async () => {
       const task = await insertTask({ projectId: projectB, assigneeMemberId: null });
 
       const response = await changeStatus(managerA.cookie, task.id, {
@@ -427,8 +449,8 @@ describe('alcance por sitio sobre tareas (integración)', () => {
         expected_version: task.version + 7,
       });
 
-      expect(response.statusCode, response.body).toBe(403);
-      expect(response.json().data).toMatchObject({ domain_code: 'task_site_access_forbidden' });
+      expect(response.statusCode, response.body).toBe(404);
+      expect(response.json().data).toMatchObject({ domain_code: 'task_not_found' });
     });
 
     it('el operator que bloquea una tarea sin asignar deja un task_update block_report a su nombre', async () => {
@@ -453,6 +475,133 @@ describe('alcance por sitio sobre tareas (integración)', () => {
           created_by_member_id: operatorA.memberId,
         },
       ]);
+    });
+  });
+
+  describe('proyecto reservado (ADR-017)', () => {
+    // Miembros explícitos del proyecto reservado, SIN fila en el sitio.
+    let explicitOperator: MemberWithRole;
+    let explicitManager: MemberWithRole;
+    // Ni miembro ni sitio: no tiene forma de entrar al proyecto.
+    let stranger: MemberWithRole;
+
+    beforeAll(async () => {
+      explicitOperator = operatorNone;
+      explicitManager = managerNone;
+      stranger = await addMemberWithRole(app, auth, {
+        organizationId,
+        role: 'operator',
+        label: 'Operario sin sitio ni proyecto',
+      });
+      await addProjectMember(reservedProject, explicitOperator.memberId);
+      await addProjectMember(reservedProject, explicitManager.memberId);
+    });
+
+    it('un operator del sitio que no participa no ve la tarea: 404, no 403', async () => {
+      const task = await insertTask({ projectId: reservedProject, assigneeMemberId: null });
+
+      const response = await changeStatus(operatorA.cookie, task.id, {
+        to_status: 'blocked',
+        expected_version: task.version,
+        reason: 'No llegó el material',
+      });
+
+      expect(response.statusCode, response.body).toBe(404);
+      expect(response.json().data).toMatchObject({ domain_code: 'task_not_found' });
+    });
+
+    it('un manager del sitio que no participa no ve el proyecto reservado: crear es 404', async () => {
+      const response = await createTask(managerA.cookie, { project_id: reservedProject });
+
+      expect(response.statusCode).toBe(404);
+      expect(response.json().data).toMatchObject({ domain_code: 'project_not_found' });
+    });
+
+    it('un miembro explícito sin acceso al sitio actúa según su rol: el manager crea tareas', async () => {
+      const response = await createTask(explicitManager.cookie, { project_id: reservedProject });
+
+      expect(response.statusCode, response.body).toBe(200);
+    });
+
+    it('un operator miembro explícito puede bloquear una tarea sin asignar, no arrancarla', async () => {
+      const task = await insertTask({ projectId: reservedProject, assigneeMemberId: null });
+
+      const started = await changeStatus(explicitOperator.cookie, task.id, {
+        to_status: 'in_progress',
+        expected_version: task.version,
+      });
+      expect(started.statusCode, started.body).toBe(403);
+      expect(started.json().data).toMatchObject({
+        domain_code: 'task_status_transition_requires_assignee',
+      });
+
+      const blocked = await changeStatus(explicitOperator.cookie, task.id, {
+        to_status: 'blocked',
+        expected_version: task.version,
+        reason: 'Falta el permiso municipal',
+      });
+      expect(blocked.statusCode, blocked.body).toBe(200);
+    });
+
+    it('un operator asignado que no es miembro ve y mueve SU tarea; la ajena es 404', async () => {
+      const mine = await insertTask({
+        projectId: reservedProject,
+        assigneeMemberId: stranger.memberId,
+      });
+      const notMine = await insertTask({ projectId: reservedProject, assigneeMemberId: null });
+
+      const moved = await changeStatus(stranger.cookie, mine.id, {
+        to_status: 'in_progress',
+        expected_version: mine.version,
+      });
+      expect(moved.statusCode, moved.body).toBe(200);
+
+      const hidden = await changeStatus(stranger.cookie, notMine.id, {
+        to_status: 'blocked',
+        expected_version: notMine.version,
+        reason: 'No debería verla',
+      });
+      expect(hidden.statusCode, hidden.body).toBe(404);
+    });
+
+    it('un manager solo asignado ve el proyecto pero no puede crear tareas: 403 con motivo propio', async () => {
+      await insertTask({ projectId: reservedProject, assigneeMemberId: managerA.memberId });
+
+      const response = await createTask(managerA.cookie, { project_id: reservedProject });
+
+      expect(response.statusCode, response.body).toBe(403);
+      expect(response.json().data).toMatchObject({
+        domain_code: 'task_create_project_access_forbidden',
+      });
+    });
+
+    it('se le puede asignar a un miembro explícito aunque no tenga acceso al sitio', async () => {
+      const response = await createTask(ownerCookie, {
+        project_id: reservedProject,
+        assignee_member_id: explicitOperator.memberId,
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+    });
+
+    it('y no a quien no es miembro ni tiene el sitio', async () => {
+      const response = await createTask(ownerCookie, {
+        project_id: reservedProject,
+        assignee_member_id: newId(),
+      });
+      expect(response.statusCode).toBe(422);
+
+      const noAccess = await addMemberWithRole(app, auth, {
+        organizationId,
+        role: 'operator',
+        label: 'Operario que no entra',
+      });
+      const rejected = await createTask(ownerCookie, {
+        project_id: reservedProject,
+        assignee_member_id: noAccess.memberId,
+      });
+      expect(rejected.statusCode, rejected.body).toBe(422);
+      expect(rejected.json().data).toMatchObject({ domain_code: 'assignee_not_assignable' });
     });
   });
 });

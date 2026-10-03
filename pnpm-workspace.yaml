@@ -1,6 +1,12 @@
 packages:
   - "apps/*"
   - "packages/*"
+# Versión de pg-boss declarada una sola vez: la usan `packages/db` (que instala y
+# actualiza el esquema `pgboss` en el paso de migraciones) y `apps/worker` (que
+# lo ejecuta). Si fueran dos números a mantener iguales a mano, subir uno sin el
+# otro dejaría al worker contra un esquema que el migrador no instaló.
+catalog:
+  pg-boss: 12.33.2
 allowBuilds:
   # cpu-features y ssh2: dependencias de testcontainers (exec dentro del
   # contenedor). protobufjs: dependencia de testcontainers. esbuild: usado

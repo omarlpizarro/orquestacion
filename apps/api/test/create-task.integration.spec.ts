@@ -69,8 +69,8 @@ describe('POST /projects/tasks (integración)', () => {
     projectId = newId();
     await withTenantTransaction(db, { organizationId, memberId, requestId: newId() }, (tx) =>
       tx.execute(sql`
-        insert into project (id, organization_id, site_id, created_by_member_id, code, name)
-        values (${projectId}, ${organizationId}, ${siteId}, ${memberId}, 'PRY-1', 'Frente Norte')
+        insert into project (id, organization_id, site_id, created_by_member_id, code, name, visibility)
+        values (${projectId}, ${organizationId}, ${siteId}, ${memberId}, 'PRY-1', 'Frente Norte', 'site')
       `),
     );
   });

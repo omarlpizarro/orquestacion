@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { type PostgresHarness, startPostgresHarness } from '../src/testing/postgres-harness.js';
-import { withSystemTransaction, withTenantTransaction } from '../src/transaction.js';
+import { withoutTenantTransaction, withTenantTransaction } from '../src/transaction.js';
 
 /**
  * El test obligatorio de CLAUDE.md §10: ninguna organización puede leer o
@@ -105,7 +105,7 @@ describe('aislamiento de tenant', () => {
   });
 
   it('una transacción de sistema no ve ninguna fila de tenant', async () => {
-    const result = await withSystemTransaction(harness.db, { requestId: randomUUID() }, (tx) =>
+    const result = await withoutTenantTransaction(harness.db, { requestId: randomUUID() }, (tx) =>
       tx.execute(sql`select id from tenant_isolation_probe`),
     );
 

@@ -162,6 +162,12 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+catalogs:
+  default:
+    pg-boss:
+      specifier: 12.33.2
+      version: 12.33.2
+
 importers:
 
   .:
@@ -322,7 +328,7 @@ importers:
         specifier: 0.45.2
         version: 0.45.2(@types/pg@8.23.1)(kysely@0.29.6)(pg@8.23.0)
       pg-boss:
-        specifier: 12.33.2
+        specifier: 'catalog:'
         version: 12.33.2
     devDependencies:
       '@types/node':
@@ -381,6 +387,9 @@ importers:
       pg:
         specifier: 8.23.0
         version: 8.23.0
+      pg-boss:
+        specifier: 'catalog:'
+        version: 12.33.2
     devDependencies:
       '@orq/config':
         specifier: workspace:*

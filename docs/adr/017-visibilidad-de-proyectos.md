@@ -133,7 +133,10 @@ combinación de rol y fila.
 - Hijas (`task_update`, `attachment`, `task_acknowledgement`): `SELECT` con
   acceso completo o tarea asignada (`app_assigned_task_ids`); `INSERT` con lo
   mismo, porque quien tiene una tarea asignada tiene que poder escribir en ella
-  (un bloqueo es un `task_update`).
+  (un bloqueo es un `task_update`). **`UPDATE` y `DELETE` llevan la misma
+  condición que `SELECT`** (no los nombraba la primera versión de este texto):
+  sin ellos, un `UPDATE` o `DELETE` sin `WHERE` a una novedad de un proyecto
+  ajeno solo tendría la policy de organización.
 - `project`: organización, y (privilegiado, o acceso completo, o asignado).
 - `project_member`: privilegiado o acceso completo al proyecto. El asignado no
   ve quién más participa.
@@ -156,7 +159,7 @@ un metatest:
    él: solo es el dueño de las funciones.
 3. **Mínimo privilegio.** Solo `SELECT`, y solo sobre las tablas que las
    funciones leen (`project`, `project_member`, `task`, `member_site_access`,
-   `auth.member`). Dueño de esas funciones y de nada más. Cada función filtra
+   `auth.member`). Dueño de esas funciones y de nada más (el traspaso lo hace un puente del superusuario, ver "Actualización del PR de comportamiento"). Cada función filtra
    siempre por `organization_id = app.current_org`; llamada con la organización
    de otro tenant no devuelve nada de la primera.
 
@@ -164,7 +167,8 @@ un metatest:
 
 - que el conjunto de funciones auxiliares es exactamente el de la tabla de
   arriba, que ninguna otra pertenece al rol, y que todas son `SECURITY DEFINER`
-  con `search_path` fijo y `EXECUTE` solo para `app_user` (no para `PUBLIC`);
+  con `search_path` exactamente `pg_catalog, public, pg_temp` y `EXECUTE` solo para
+  `app_user` (no para `PUBLIC`);
 - que `pg_proc.prorettype` de cada una es `boolean` o `uuid` (este último solo
   como `setof`) — nunca un tipo compuesto, `text` ni `jsonb`;
 - que el rol es `NOLOGIN` y `BYPASSRLS`, que `pg_auth_members` no lo relaciona
@@ -314,6 +318,121 @@ En un Postgres 17 descartable, con tablas y roles mínimos equivalentes:
 **No se verificó** si alguna variante sin `BYPASSRLS` corta el ciclo, y
 `session_user` como base de la identidad de sistema se verifica contra el
 Postgres real en el PR de comportamiento (ver Plan).
+
+## Actualización del PR de comportamiento (2026-10-03)
+
+Lo que apareció al implementar y no estaba en el texto de arriba. Las decisiones
+son de Omar; acá queda el porqué.
+
+### El traspaso de dueño de las funciones: un puente del superusuario
+
+Verificado en un Postgres 17: `app_owner` (quien corre las migraciones) no puede
+fijar a `app_rls_helper` como dueño de una función (`ALTER FUNCTION ... OWNER TO`
+falla con "must be able to SET ROLE"), y aun con membresía falla con "permission
+denied for schema public" salvo que el rol auxiliar tenga `CREATE` en `public`.
+Resolverlo con una membresía `WITH ADMIN OPTION` de `app_owner` en el rol auxiliar
+se descartó: ese permiso le deja otorgar el rol a cualquier otro, incluido el de
+la API, así que una línea equivocada en una migración le daría a la API un rol con
+`BYPASSRLS`.
+
+En su lugar, `packages/db/sql/ensure-roles.sql` (que ya corre un superusuario)
+crea `app_transfer_rls_helper_function(regprocedure, boolean)`:
+
+- Dueño: el superusuario que corre el script. `SECURITY DEFINER`, `search_path =
+  pg_catalog`, `EXECUTE` revocado a `PUBLIC` y otorgado solo a `app_owner`.
+- **Lista fija escrita en el propio puente**, por firma exacta (las seis de §3).
+  Sumar una función con `BYPASSRLS` exige modificar `ensure-roles.sql` y que una
+  persona con acceso de superusuario lo vuelva a correr: es un control humano
+  deliberado, no una limitación. Ninguna migración puede ampliar la lista.
+- Antes de traspasar valida las condiciones de §4, no solo el nombre: esquema
+  `public`, dueño actual `app_owner`, `prosecdef`, `STABLE`, `search_path` fijado
+  en `proconfig`, lenguaje `sql`/`plpgsql`, retorno `boolean` o `setof uuid` y sin
+  `EXECUTE` para `PUBLIC`. Si algo no cumple, rechaza con un mensaje claro.
+- **Corregir el cuerpo de una función ya traspasada.** `app_owner` dejó de ser su
+  dueño y no puede reemplazarla. El camino: la misma migración la devuelve con
+  `(función, false)` (limitado a la lista y a funciones que hoy son del rol
+  auxiliar), hace `CREATE OR REPLACE`, vuelve a fijar los permisos y la traspasa
+  con `(función, true)`, todo en una transacción. Cambiar la firma o el tipo de
+  retorno exige además `DROP`, que Postgres rechaza mientras las policies la
+  referencien: ahí se recrean las policies en la misma migración.
+- El metatest verifica el puente: dueño superusuario, permisos, que rechace una
+  función fuera de la lista y una de la lista que incumpla cada condición, y que
+  la acepte cuando cumple.
+
+Consecuencia sobre §4.2 ("sin membresías en ningún sentido"): se cumple
+literalmente, sin excepción. El costo es un objeto más en la base cuyo dueño es el
+superusuario, y que la migración exige haber corrido `ensure-roles.sql` (ya lo
+exigía por los roles).
+
+### search_path y tablas temporales (hallazgo de la revisión del PR)
+
+Para las relaciones, Postgres busca primero en el esquema temporal salvo que
+`pg_temp` figure explícito en el `search_path`. Las seis funciones corren con
+`BYPASSRLS` en la sesión de quien las llama: con `search_path = public,
+pg_catalog` y tablas sin calificar, una sesión de la API podía crear una tabla
+temporal `project_member` (o `task`, `project`, `member_site_access`) con filas
+falsas, darle `SELECT` al rol auxiliar y hacer que la función la leyera en vez de
+la real. Es el riesgo que el manual de Postgres documenta para toda función
+`SECURITY DEFINER`. Verificado: una función de control escrita con el patrón
+viejo lee la tabla falsa y devuelve que el proyecto reservado es accesible
+(`project-isolation-temp-tables.integration.spec.ts`).
+
+- **Toda función `SECURITY DEFINER` del repo** (las seis auxiliares,
+  `app_ensure_audit_partitions` y el puente) fija `SET search_path = pg_catalog,
+  public, pg_temp` y **califica con su esquema** cada tabla y función que usa
+  (`public.project_member`, `auth.member`, `public.app_is_privileged()`). El
+  `pg_temp` explícito y al final es lo que impide que una tabla temporal se
+  interponga; la calificación es un segundo cerrojo.
+- **El puente valida ese `search_path` exacto** (`proconfig` igual a ese único
+  valor), en lugar del anterior: una función con el orden distinto, sin
+  `pg_temp` o con otro valor se rechaza.
+- **Defensa adicional:** `ensure-roles.sql` revoca `TEMPORARY` sobre la base a
+  `PUBLIC`, y su verificación final aborta si algún rol de la aplicación todavía
+  puede crear tablas temporales. Ni la API, ni los workers, ni pg-boss, ni las
+  migraciones las usan. Si algún día hace falta, se otorga a un rol puntual.
+- **Test de regresión**, conectado como `app_login`: (1) crear una tabla
+  temporal es `permission denied`; (2) devuelto el permiso a propósito, con tablas
+  temporales falsas de `project`, `project_member`, `member_site_access` y
+  `task`, las funciones siguen sin dar acceso y el proyecto reservado sigue
+  invisible y no escribible; y un control positivo prueba que el ataque funciona
+  contra una función mal escrita. El metatest verifica que **toda** función
+  `SECURITY DEFINER` de `public` tiene exactamente ese `search_path`.
+
+### Otros ajustes
+
+- **`UPDATE` y `DELETE` también llevan policy restrictiva** en las hijas de una
+  tarea (ya reflejado en §3): sin ellas, un `UPDATE` o `DELETE` sin `WHERE` a
+  una novedad de un proyecto ajeno solo tendría la policy de organización. Se
+  aplican por catálogo con `app_apply_project_policies()`
+  (toda tabla con `project_id` y `task_id`), que toda migración que cree una
+  tabla así debe correr (CLAUDE.md §6).
+- **`app_owner` no ejecuta las funciones** (§4.3 pide `EXECUTE` solo para
+  `app_user`). Una consulta de `app_owner` sobre una tabla con policies por
+  proyecto falla con `permission denied for function`; los backfills de
+  migración ya bajaban `FORCE` temporalmente.
+- **Un miembro con varios roles no es privilegiado en SQL** (`"owner,manager"`
+  se compara completo): coincide con que `parseSingleOrgRole` también se niega a
+  elegir uno.
+- **`withSystemTransaction` se renombró en dos.** La función sin organización que
+  se llamaba así pasó a `withoutTenantTransaction` (health, listar
+  organizaciones); `withSystemTransaction` es ahora la de §5, exportada solo por
+  `@orq/db/system`. La barrera de importación es un test
+  (`system-transaction-barrier.spec.ts`) y no una regla de dependency-cruiser:
+  el paquete se resuelve a `packages/db/dist`, que la configuración excluye a
+  propósito, y una regla sobre ese destino quedaría muda en silencio.
+- **El `INSERT ... RETURNING` de un proyecto reservado todavía sin miembros no
+  pasa la policy de `SELECT`**, y el creador no puede insertarse como
+  `project_member` de un proyecto que todavía no ve (la policy de
+  `project_member` exige acceso completo). Hay que resolverlo en el PR del CRUD
+  de proyectos, sin agregar funciones fuera de la lista de §3 (por ejemplo,
+  creando proyecto y membresía del creador en una sola función `SECURITY
+  DEFINER` propia, o con una policy de `INSERT` acotada al instante de creación).
+  **Restricción de diseño:** el acceso del creador no puede ser implícito por
+  `project.created_by_member_id`. §8 dice que `owner` y `director` pueden quitar
+  al creador y que entonces pierde el acceso; un acceso derivado de esa columna
+  no se podría quitar sin reescribir el proyecto. El creador entra como
+  `project_member` explícito, como dice §2, y la solución tiene que producir esa
+  fila, no saltearla. Queda sin resolver aquí a propósito.
 
 ## Alternativas descartadas
 

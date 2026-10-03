@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import type { OrgRole } from '../../../shared/auth/org-role.js';
 import { InvalidTaskStatusTransitionError } from './errors/invalid-task-status-transition.error.js';
 import { ReasonRequiredError } from './errors/reason-required.error.js';
-import { TaskSiteAccessForbiddenError } from './errors/task-site-access-forbidden.error.js';
 import { TaskStatusTransitionForbiddenError } from './errors/task-status-transition-forbidden.error.js';
 import { TaskStatusTransitionRequiresAssigneeError } from './errors/task-status-transition-requires-assignee.error.js';
 import {
@@ -16,16 +15,16 @@ import {
 } from './task-status-transitions.js';
 
 /**
- * `hasSiteAccess` e `isUnassigned` son obligatorios en la firma real (un
+ * `hasFullProjectAccess` e `isUnassigned` son obligatorios en la firma real (un
  * llamador que los olvide no compila). Las matrices de roles/estados de
- * abajo no hablan del alcance por sitio, así que los fijan en el caso neutro:
- * con acceso y con alguien asignado. El alcance se prueba en su propia matriz.
+ * abajo no hablan del acceso al proyecto, así que los fijan en el caso neutro:
+ * con acceso completo y con alguien asignado. Se prueba en su propia matriz.
  */
 function resolveTaskStatusTransition(
-  request: Omit<TaskStatusTransitionRequest, 'hasSiteAccess' | 'isUnassigned'> &
-    Partial<Pick<TaskStatusTransitionRequest, 'hasSiteAccess' | 'isUnassigned'>>,
+  request: Omit<TaskStatusTransitionRequest, 'hasFullProjectAccess' | 'isUnassigned'> &
+    Partial<Pick<TaskStatusTransitionRequest, 'hasFullProjectAccess' | 'isUnassigned'>>,
 ) {
-  return resolveStrict({ hasSiteAccess: true, isUnassigned: false, ...request });
+  return resolveStrict({ hasFullProjectAccess: true, isUnassigned: false, ...request });
 }
 
 const ALL_STATUSES: readonly TaskStatus[] = [
@@ -219,118 +218,118 @@ describe('permiso por asignación: operator solo transiciona sus propias tareas'
 });
 
 /**
- * Matriz rol × acceso al sitio × estado de la asignación × destino. Cada fila
- * es una decisión de negocio escrita a mano (CLAUDE.md §7, ADR-015), no
- * derivada de la implementación: `pending → in_progress` y `pending → blocked`
- * existen para todos los roles, así que lo único que puede rechazar es el
- * alcance.
+ * Matriz rol × acceso completo al proyecto × estado de la asignación × destino.
+ * Cada fila es una decisión de negocio escrita a mano (CLAUDE.md §7, ADR-017),
+ * no derivada de la implementación: `pending → in_progress` y
+ * `pending → blocked` existen para todos los roles, así que lo único que puede
+ * rechazar es la asignación. Quien no ve la tarea ni llega acá: recibe 404.
  */
 type Assignment = 'assigned_to_requester' | 'unassigned' | 'assigned_to_other';
-type Outcome = 'allowed' | 'site_access' | 'requires_assignee';
+type Outcome = 'allowed' | 'requires_assignee';
 
 const SCOPE_MATRIX: ReadonlyArray<{
   role: OrgRole;
-  siteAccess: boolean;
+  fullAccess: boolean;
   assignment: Assignment;
   toInProgress: Outcome;
   toBlocked: Outcome;
 }> = [
-  // owner y director: el acceso al sitio es implícito (canAccessSite siempre da true).
+  // owner y director: acceso completo siempre (app_is_privileged).
   ...('owner director'.split(' ') as OrgRole[]).flatMap((role) =>
     ('assigned_to_requester unassigned assigned_to_other'.split(' ') as Assignment[]).map(
       (assignment) => ({
         role,
-        siteAccess: true,
+        fullAccess: true,
         assignment,
         toInProgress: 'allowed' as const,
         toBlocked: 'allowed' as const,
       }),
     ),
   ),
-  // manager con acceso: sin restricción de asignación.
+  // manager con acceso completo: sin restricción de asignación.
   {
     role: 'manager',
-    siteAccess: true,
+    fullAccess: true,
     assignment: 'assigned_to_requester',
     toInProgress: 'allowed',
     toBlocked: 'allowed',
   },
   {
     role: 'manager',
-    siteAccess: true,
+    fullAccess: true,
     assignment: 'unassigned',
     toInProgress: 'allowed',
     toBlocked: 'allowed',
   },
   {
     role: 'manager',
-    siteAccess: true,
+    fullAccess: true,
     assignment: 'assigned_to_other',
     toInProgress: 'allowed',
     toBlocked: 'allowed',
   },
-  // manager sin acceso: nada, ni siquiera sobre una tarea que tiene asignada.
+  // manager solo asignado: el dominio no lo limita más (la base ya le oculta lo que no es suyo).
   {
     role: 'manager',
-    siteAccess: false,
+    fullAccess: false,
     assignment: 'assigned_to_requester',
-    toInProgress: 'site_access',
-    toBlocked: 'site_access',
+    toInProgress: 'allowed',
+    toBlocked: 'allowed',
   },
   {
     role: 'manager',
-    siteAccess: false,
+    fullAccess: false,
     assignment: 'unassigned',
-    toInProgress: 'site_access',
-    toBlocked: 'site_access',
+    toInProgress: 'allowed',
+    toBlocked: 'allowed',
   },
   {
     role: 'manager',
-    siteAccess: false,
+    fullAccess: false,
     assignment: 'assigned_to_other',
-    toInProgress: 'site_access',
-    toBlocked: 'site_access',
+    toInProgress: 'allowed',
+    toBlocked: 'allowed',
   },
-  // operator con acceso: la propia sí; sin asignar solo → blocked; ajena nada.
+  // operator con acceso completo: la propia sí; sin asignar solo → blocked; ajena nada.
   {
     role: 'operator',
-    siteAccess: true,
+    fullAccess: true,
     assignment: 'assigned_to_requester',
     toInProgress: 'allowed',
     toBlocked: 'allowed',
   },
   {
     role: 'operator',
-    siteAccess: true,
+    fullAccess: true,
     assignment: 'unassigned',
     toInProgress: 'requires_assignee',
     toBlocked: 'allowed',
   },
   {
     role: 'operator',
-    siteAccess: true,
+    fullAccess: true,
     assignment: 'assigned_to_other',
-    toInProgress: 'requires_assignee',
-    toBlocked: 'requires_assignee',
-  },
-  // operator sin acceso: solo la tarea que tiene asignada (ser el asignado alcanza).
-  {
-    role: 'operator',
-    siteAccess: false,
-    assignment: 'assigned_to_requester',
-    toInProgress: 'allowed',
-    toBlocked: 'allowed',
-  },
-  {
-    role: 'operator',
-    siteAccess: false,
-    assignment: 'unassigned',
     toInProgress: 'requires_assignee',
     toBlocked: 'requires_assignee',
   },
+  // operator solo asignado: únicamente la tarea que tiene asignada (ser el asignado alcanza).
   {
     role: 'operator',
-    siteAccess: false,
+    fullAccess: false,
+    assignment: 'assigned_to_requester',
+    toInProgress: 'allowed',
+    toBlocked: 'allowed',
+  },
+  {
+    role: 'operator',
+    fullAccess: false,
+    assignment: 'unassigned',
+    toInProgress: 'requires_assignee',
+    toBlocked: 'requires_assignee',
+  },
+  {
+    role: 'operator',
+    fullAccess: false,
     assignment: 'assigned_to_other',
     toInProgress: 'requires_assignee',
     toBlocked: 'requires_assignee',
@@ -338,22 +337,21 @@ const SCOPE_MATRIX: ReadonlyArray<{
 ];
 
 const OUTCOME_ERROR = {
-  site_access: TaskSiteAccessForbiddenError,
   requires_assignee: TaskStatusTransitionRequiresAssigneeError,
 } as const;
 
-describe('alcance por sitio: rol × acceso × asignación', () => {
+describe('acceso al proyecto: rol × acceso × asignación', () => {
   for (const row of SCOPE_MATRIX) {
     for (const [to, outcome] of [
       ['in_progress', row.toInProgress],
       ['blocked', row.toBlocked],
     ] as const) {
-      it(`${row.role}, ${row.siteAccess ? 'con' : 'sin'} acceso, tarea ${row.assignment}, pending -> ${to}: ${outcome}`, () => {
+      it(`${row.role}, ${row.fullAccess ? 'con acceso completo' : 'solo asignado'}, tarea ${row.assignment}, pending -> ${to}: ${outcome}`, () => {
         const request = {
           from: 'pending',
           to,
           role: row.role,
-          hasSiteAccess: row.siteAccess,
+          hasFullProjectAccess: row.fullAccess,
           isAssignee: row.assignment === 'assigned_to_requester',
           isUnassigned: row.assignment === 'unassigned',
           reason: 'Motivo de prueba',
@@ -369,7 +367,7 @@ describe('alcance por sitio: rol × acceso × asignación', () => {
   }
 
   it('operator sin asignar con acceso: la excepción vale solo hacia blocked, desde in_progress también', () => {
-    const base = { role: 'operator', hasSiteAccess: true, isUnassigned: true } as const;
+    const base = { role: 'operator', hasFullProjectAccess: true, isUnassigned: true } as const;
     expect(
       resolveStrict({ ...base, from: 'in_progress', to: 'blocked', reason: 'Sin material' }).to,
     ).toBe('blocked');
@@ -387,34 +385,19 @@ describe('alcance por sitio: rol × acceso × asignación', () => {
         from: 'pending',
         to: 'blocked',
         role: 'operator',
-        hasSiteAccess: true,
+        hasFullProjectAccess: true,
         isUnassigned: true,
       }),
     ).toThrow(ReasonRequiredError);
   });
 
-  it('un manager sin acceso se rechaza por sitio antes de mirar la matriz: ni una transición inexistente ni un rol sin permiso lo tapan', () => {
-    const base = { role: 'manager', hasSiteAccess: false, isUnassigned: false } as const;
+  it('el dominio ya no corta por sitio: un manager sin acceso completo pasa a la matriz de roles', () => {
+    const base = { role: 'manager', hasFullProjectAccess: false, isUnassigned: false } as const;
+    expect(resolveStrict({ ...base, from: 'pending', to: 'in_progress' }).to).toBe('in_progress');
+    // Y la matriz sigue mandando: una transición inexistente se rechaza igual.
     expect(() => resolveStrict({ ...base, from: 'pending', to: 'done' })).toThrow(
-      TaskSiteAccessForbiddenError,
+      InvalidTaskStatusTransitionError,
     );
-    expect(() => resolveStrict({ ...base, from: 'cancelled', to: 'pending' })).toThrow(
-      TaskSiteAccessForbiddenError,
-    );
-  });
-
-  it('fail-closed: owner/director con hasSiteAccess en false tampoco pasan', () => {
-    for (const role of ['owner', 'director'] as const) {
-      expect(() =>
-        resolveStrict({
-          from: 'pending',
-          to: 'in_progress',
-          role,
-          hasSiteAccess: false,
-          isUnassigned: false,
-        }),
-      ).toThrow(TaskSiteAccessForbiddenError);
-    }
   });
 });
 
