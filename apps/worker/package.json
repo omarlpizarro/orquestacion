@@ -14,7 +14,7 @@
     "@orq/config": "workspace:*",
     "@orq/db": "workspace:*",
     "drizzle-orm": "0.45.2",
-    "pg-boss": "12.33.2"
+    "pg-boss": "catalog:"
   },
   "devDependencies": {
     "@types/node": "24.13.6",

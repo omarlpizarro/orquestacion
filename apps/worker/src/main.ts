@@ -1,4 +1,4 @@
-import { loadServerEnv } from '@orq/config';
+import { loadWorkerEnv } from '@orq/config';
 import { createDb, createPool, withSystemTransaction } from '@orq/db';
 import { sql } from 'drizzle-orm';
 import { PgBoss } from 'pg-boss';
@@ -6,11 +6,20 @@ import { PgBoss } from 'pg-boss';
 const QUEUE_HEALTH_PING = 'health.ping';
 
 async function main() {
-  const env = loadServerEnv();
-  const pool = createPool({ connectionString: env.DATABASE_URL });
+  const env = loadWorkerEnv();
+  const pool = createPool({ connectionString: env.DATABASE_WORKER_URL });
   const db = createDb(pool);
 
-  const boss = new PgBoss(env.DATABASE_URL);
+  // El esquema `pgboss` lo instala y actualiza el paso de migraciones
+  // (`packages/db/src/pgboss-install.ts`) con las credenciales de app_owner.
+  // `app_worker` no es dueño: con `migrate: false` y `createSchema: false`,
+  // subir pg-boss sin haber migrado falla fuerte acá, que es lo deseado. Tampoco
+  // se usan `persistQueueStats` ni colas `partition: true`: hacen DDL.
+  const boss = new PgBoss({
+    connectionString: env.DATABASE_WORKER_URL,
+    migrate: false,
+    createSchema: false,
+  });
   boss.on('error', (error: Error) => console.error(error));
   await boss.start();
 
