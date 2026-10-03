@@ -115,7 +115,7 @@ grant app_user to app_worker;
 --
 -- Antes de traspasar valida las condiciones de ADR-017 §4, no solo el nombre:
 -- firma exacta de la lista, esquema public, SECURITY DEFINER, STABLE,
--- search_path fijado, lenguaje sql o plpgsql, retorno boolean o setof uuid y
+-- search_path exactamente pg_catalog, public, pg_temp, lenguaje sql o plpgsql, retorno boolean o setof uuid y
 -- sin EXECUTE para PUBLIC. Si algo no cumple, rechaza.
 --
 -- Corregir el cuerpo de una función ya traspasada: app_owner dejó de ser su
@@ -129,7 +129,7 @@ create or replace function public.app_transfer_rls_helper_function(
 ) returns void
 language plpgsql
 security definer
-set search_path = pg_catalog
+set search_path = pg_catalog, public, pg_temp
 as $bridge$
 declare
   allowed constant text[] := array[
@@ -140,13 +140,23 @@ declare
     'public.app_has_full_project_access(uuid)',
     'public.app_has_assigned_project_access(uuid)'
   ];
-  signature constant text := p_function::text;
+  -- Con public en el search_path, regprocedure::text imprime sin esquema: la
+  -- firma se arma del catálogo, siempre calificada.
+  signature text;
+  qualified text;
   f pg_proc%rowtype;
   language_name text;
 begin
   if p_function is null or p_to_helper is null then
     raise exception 'app_transfer_rls_helper_function: los dos argumentos son obligatorios.';
   end if;
+
+  select n.nspname || '.' || p.proname || '(' || oidvectortypes(p.proargtypes) || ')',
+         format('%I.%I(%s)', n.nspname, p.proname, oidvectortypes(p.proargtypes))
+    into signature, qualified
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+   where p.oid = p_function::oid;
 
   if not (signature = any (allowed)) then
     raise exception 'La función % no está en la lista fija del puente (%). Sumar una función auxiliar exige modificar ensure-roles.sql y volver a correrlo.',
@@ -160,7 +170,7 @@ begin
       raise exception 'La función % no es de app_rls_helper (es de %): no hay nada que devolver.',
         signature, f.proowner::regrole;
     end if;
-    execute format('alter function %s owner to app_owner', p_function);
+    execute format('alter function %s owner to app_owner', qualified);
     return;
   end if;
 
@@ -177,8 +187,14 @@ begin
   if f.provolatile <> 's' then
     raise exception 'La función % debe ser STABLE.', signature;
   end if;
-  if f.proconfig is null or not (f.proconfig @> array['search_path=public, pg_catalog']) then
-    raise exception 'La función % debe fijar SET search_path = public, pg_catalog.', signature;
+  -- Exactamente este y nada más. pg_catalog primero y pg_temp al final y
+  -- explícito: sin pg_temp en el search_path, Postgres busca primero en el
+  -- esquema temporal para las relaciones, y una tabla temporal de la sesión que
+  -- llama podría interponerse (manual de Postgres, "Writing SECURITY DEFINER
+  -- Functions Safely").
+  if f.proconfig is distinct from array['search_path=pg_catalog, public, pg_temp'] then
+    raise exception 'La función % debe fijar exactamente SET search_path = pg_catalog, public, pg_temp (tiene %).',
+      signature, coalesce(f.proconfig::text, 'nada');
   end if;
   select l.lanname into language_name from pg_language l where l.oid = f.prolang;
   if language_name not in ('sql', 'plpgsql') then
@@ -195,12 +211,25 @@ begin
       signature;
   end if;
 
-  execute format('alter function %s owner to app_rls_helper', p_function);
+  execute format('alter function %s owner to app_rls_helper', qualified);
 end
 $bridge$;
 
 revoke all on function public.app_transfer_rls_helper_function(regprocedure, boolean) from public;
 grant execute on function public.app_transfer_rls_helper_function(regprocedure, boolean) to app_owner;
+
+-- ---------------------------------------------------------------------------
+-- Sin tablas temporales para los roles de la aplicación (defensa adicional).
+-- ---------------------------------------------------------------------------
+-- Por defecto PUBLIC puede crear tablas temporales en toda base. Ningún rol de
+-- la aplicación las necesita (ni la API, ni los workers, ni pg-boss, ni las
+-- migraciones), y una tabla temporal es el vector de ataque a una función
+-- SECURITY DEFINER con un search_path sin pg_temp explícito. Las funciones de
+-- RLS ya no son vulnerables (search_path = pg_catalog, public, pg_temp y todo
+-- calificado); esto cierra el vector para cualquier función futura que alguien
+-- escriba mal. Si algún día hace falta, se otorga a un rol puntual: no a PUBLIC.
+select format('revoke temporary on database %I from public', current_database())
+\gexec
 
 -- Verificación final: si algo de lo que garantiza ADR-017 §4 no se cumple, esto
 -- aborta en vez de dejar el ambiente a medias.
@@ -230,6 +259,16 @@ begin
      and not r.rolsuper;
   if offender is not null then
     raise exception 'El puente app_transfer_rls_helper_function es de % y no de un superusuario: volvé a correr este script como superusuario.', offender;
+  end if;
+
+  -- Ningún rol de la aplicación puede crear tablas temporales.
+  select string_agg(r.rolname, ', ')
+    into offender
+    from pg_roles r
+   where r.rolname in ('app_owner', 'app_user', 'app_login', 'app_worker', 'app_rls_helper')
+     and has_database_privilege(r.rolname, current_database(), 'TEMPORARY');
+  if offender is not null then
+    raise exception 'Estos roles todavía pueden crear tablas temporales: %. Revisá los GRANT TEMPORARY de la base.', offender;
   end if;
 
   -- Ningún otro rol no superusuario puede tener BYPASSRLS.

@@ -192,7 +192,7 @@ describe('rol auxiliar de RLS (ADR-017 §4)', () => {
       for (const row of rows) {
         expect(row.prosecdef, row.signature).toBe(true);
         expect(row.provolatile, row.signature).toBe('s');
-        expect(row.proconfig, row.signature).toEqual(['search_path=public, pg_catalog']);
+        expect(row.proconfig, row.signature).toEqual(['search_path=pg_catalog, public, pg_temp']);
       }
     });
 
@@ -222,6 +222,41 @@ describe('rol auxiliar de RLS (ADR-017 §4)', () => {
           .map((row) => row.grantee);
         expect(grantees, signature).toEqual(['app_rls_helper', 'app_user']);
       }
+    });
+  });
+
+  describe('search_path y tablas temporales', () => {
+    it('toda función SECURITY DEFINER del esquema public fija exactamente pg_catalog, public, pg_temp', async () => {
+      const rows = await catalog<{ signature: string; proconfig: string[] | null }>(sql`
+        select p.oid::regprocedure::text as signature, p.proconfig
+          from pg_proc p
+          join pg_namespace n on n.oid = p.pronamespace and n.nspname = 'public'
+         where p.prosecdef
+         order by 1
+      `);
+      // Las seis auxiliares, el puente y app_ensure_audit_partitions: ninguna más
+      // sin revisar. Una función SECURITY DEFINER nueva tiene que cumplir esto (y
+      // calificar sus tablas), o este test falla (CLAUDE.md §6).
+      expect(rows.map((row) => row.signature).sort()).toEqual(
+        [
+          ...helperFunctions,
+          'app_ensure_audit_partitions(date,integer)',
+          'app_transfer_rls_helper_function(regprocedure,boolean)',
+        ].sort(),
+      );
+      for (const row of rows) {
+        expect(row.proconfig, row.signature).toEqual(['search_path=pg_catalog, public, pg_temp']);
+      }
+    });
+
+    it('los roles de la aplicación no pueden crear tablas temporales (defensa adicional)', async () => {
+      const rows = await catalog<{ rolname: string; can: boolean }>(sql`
+        select r.rolname, has_database_privilege(r.rolname, current_database(), 'TEMPORARY') as can
+          from pg_roles r
+         where r.rolname in ('app_owner', 'app_user', 'app_login', 'app_worker', 'app_rls_helper')
+         order by 1
+      `);
+      expect(rows.filter((row) => row.can)).toEqual([]);
     });
   });
 
@@ -393,7 +428,10 @@ describe('rol auxiliar de RLS (ADR-017 §4)', () => {
       const [config] = await catalog<{ prosecdef: boolean; proconfig: string[] }>(
         sql`select prosecdef, proconfig from pg_proc where oid = ${bridge}::regprocedure`,
       );
-      expect(config).toEqual({ prosecdef: true, proconfig: ['search_path=pg_catalog'] });
+      expect(config).toEqual({
+        prosecdef: true,
+        proconfig: ['search_path=pg_catalog, public, pg_temp'],
+      });
     });
 
     it.each([
@@ -410,7 +448,7 @@ describe('rol auxiliar de RLS (ADR-017 §4)', () => {
     it('rechaza una función fuera de la lista fija, aunque cumpla todo lo demás', async () => {
       await harness.ownerDb.execute(sql`
         create function public.app_extra() returns boolean
-        language sql stable security definer set search_path = public, pg_catalog
+        language sql stable security definer set search_path = pg_catalog, public, pg_temp
         as 'select true'
       `);
       await harness.ownerDb.execute(sql`revoke all on function public.app_extra() from public`);
@@ -419,7 +457,7 @@ describe('rol auxiliar de RLS (ADR-017 §4)', () => {
       // Una variante de firma de una función de la lista tampoco pasa.
       await harness.ownerDb.execute(sql`
         create function public.app_is_privileged(extra text) returns boolean
-        language sql stable security definer set search_path = public, pg_catalog
+        language sql stable security definer set search_path = pg_catalog, public, pg_temp
         as 'select true'
       `);
       await expectBridgeError(give('public.app_is_privileged(text)', true), /lista fija/);
@@ -444,12 +482,12 @@ describe('rol auxiliar de RLS (ADR-017 §4)', () => {
         await run(`grant execute on function ${signature} to app_user`);
         if (extra) await run(extra);
       };
-      const secdef = 'security definer set search_path = public, pg_catalog';
+      const secdef = 'security definer set search_path = pg_catalog, public, pg_temp';
 
       const defects: Array<[string, string, RegExp]> = [
         [
           'sin SECURITY DEFINER',
-          `${header} returns boolean language sql stable set search_path = public, pg_catalog as 'select true'`,
+          `${header} returns boolean language sql stable set search_path = pg_catalog, public, pg_temp as 'select true'`,
           /SECURITY DEFINER/,
         ],
         [
@@ -460,6 +498,16 @@ describe('rol auxiliar de RLS (ADR-017 §4)', () => {
         [
           'sin search_path fijo',
           `${header} returns boolean language sql stable security definer as 'select true'`,
+          /search_path/,
+        ],
+        [
+          'el search_path anterior, sin pg_temp explícito',
+          `${header} returns boolean language sql stable security definer set search_path = public, pg_catalog as 'select true'`,
+          /search_path/,
+        ],
+        [
+          'search_path con pg_temp pero en otro orden',
+          `${header} returns boolean language sql stable security definer set search_path = public, pg_catalog, pg_temp as 'select true'`,
           /search_path/,
         ],
         [

@@ -213,6 +213,14 @@ Detalle completo en `docs/data-model.md`. Lo mínimo que tenés que respetar sie
   `0005_projects`, `0012_project_visibility_structure` y
   `0015_project_visibility_behavior`, ver `packages/db/migrations/`). Todas son idempotentes: cubren la tabla
   nueva sin tener que escribir la policy o los triggers a mano.
+- **Toda función `SECURITY DEFINER` lleva `SET search_path = pg_catalog, public,
+  pg_temp` y califica con su esquema cada tabla y función que usa**
+  (`public.project_member`, `auth.member`). Sin `pg_temp` explícito, Postgres
+  busca primero en el esquema temporal para las relaciones, y una tabla
+  temporal de la sesión que llama se interpone: con una función de
+  `BYPASSRLS` eso es una fuga (ADR-017). El puente de `ensure-roles.sql`
+  rechaza traspasar una función con otro `search_path`, y el metatest de
+  `rls-helper-role` falla si una `SECURITY DEFINER` de `public` no lo cumple.
 - **Las migraciones solo agregan; nunca rompen lo que usa el código anterior.**
   Cada migración tiene que dejar funcionando la versión del código que estaba
   desplegada *antes* de ella, por dos motivos: entre el paso de migraciones y

@@ -133,7 +133,10 @@ combinación de rol y fila.
 - Hijas (`task_update`, `attachment`, `task_acknowledgement`): `SELECT` con
   acceso completo o tarea asignada (`app_assigned_task_ids`); `INSERT` con lo
   mismo, porque quien tiene una tarea asignada tiene que poder escribir en ella
-  (un bloqueo es un `task_update`).
+  (un bloqueo es un `task_update`). **`UPDATE` y `DELETE` llevan la misma
+  condición que `SELECT`** (no los nombraba la primera versión de este texto):
+  sin ellos, un `UPDATE` o `DELETE` sin `WHERE` a una novedad de un proyecto
+  ajeno solo tendría la policy de organización.
 - `project`: organización, y (privilegiado, o acceso completo, o asignado).
 - `project_member`: privilegiado o acceso completo al proyecto. El asignado no
   ve quién más participa.
@@ -164,7 +167,8 @@ un metatest:
 
 - que el conjunto de funciones auxiliares es exactamente el de la tabla de
   arriba, que ninguna otra pertenece al rol, y que todas son `SECURITY DEFINER`
-  con `search_path` fijo y `EXECUTE` solo para `app_user` (no para `PUBLIC`);
+  con `search_path` exactamente `pg_catalog, public, pg_temp` y `EXECUTE` solo para
+  `app_user` (no para `PUBLIC`);
 - que `pg_proc.prorettype` de cada una es `boolean` o `uuid` (este último solo
   como `setof`) — nunca un tipo compuesto, `text` ni `jsonb`;
 - que el rol es `NOLOGIN` y `BYPASSRLS`, que `pg_auth_members` no lo relaciona
@@ -360,12 +364,46 @@ literalmente, sin excepción. El costo es un objeto más en la base cuyo dueño 
 superusuario, y que la migración exige haber corrido `ensure-roles.sql` (ya lo
 exigía por los roles).
 
+### search_path y tablas temporales (hallazgo de la revisión del PR)
+
+Para las relaciones, Postgres busca primero en el esquema temporal salvo que
+`pg_temp` figure explícito en el `search_path`. Las seis funciones corren con
+`BYPASSRLS` en la sesión de quien las llama: con `search_path = public,
+pg_catalog` y tablas sin calificar, una sesión de la API podía crear una tabla
+temporal `project_member` (o `task`, `project`, `member_site_access`) con filas
+falsas, darle `SELECT` al rol auxiliar y hacer que la función la leyera en vez de
+la real. Es el riesgo que el manual de Postgres documenta para toda función
+`SECURITY DEFINER`. Verificado: una función de control escrita con el patrón
+viejo lee la tabla falsa y devuelve que el proyecto reservado es accesible
+(`project-isolation-temp-tables.integration.spec.ts`).
+
+- **Toda función `SECURITY DEFINER` del repo** (las seis auxiliares,
+  `app_ensure_audit_partitions` y el puente) fija `SET search_path = pg_catalog,
+  public, pg_temp` y **califica con su esquema** cada tabla y función que usa
+  (`public.project_member`, `auth.member`, `public.app_is_privileged()`). El
+  `pg_temp` explícito y al final es lo que impide que una tabla temporal se
+  interponga; la calificación es un segundo cerrojo.
+- **El puente valida ese `search_path` exacto** (`proconfig` igual a ese único
+  valor), en lugar del anterior: una función con el orden distinto, sin
+  `pg_temp` o con otro valor se rechaza.
+- **Defensa adicional:** `ensure-roles.sql` revoca `TEMPORARY` sobre la base a
+  `PUBLIC`, y su verificación final aborta si algún rol de la aplicación todavía
+  puede crear tablas temporales. Ni la API, ni los workers, ni pg-boss, ni las
+  migraciones las usan. Si algún día hace falta, se otorga a un rol puntual.
+- **Test de regresión**, conectado como `app_login`: (1) crear una tabla
+  temporal es `permission denied`; (2) devuelto el permiso a propósito, con tablas
+  temporales falsas de `project`, `project_member`, `member_site_access` y
+  `task`, las funciones siguen sin dar acceso y el proyecto reservado sigue
+  invisible y no escribible; y un control positivo prueba que el ataque funciona
+  contra una función mal escrita. El metatest verifica que **toda** función
+  `SECURITY DEFINER` de `public` tiene exactamente ese `search_path`.
+
 ### Otros ajustes
 
 - **`UPDATE` y `DELETE` también llevan policy restrictiva** en las hijas de una
-  tarea (§3 nombra solo `SELECT` e `INSERT`): sin ellas, un `UPDATE` o `DELETE`
-  sin `WHERE` a una novedad de un proyecto ajeno solo tendría la policy de
-  organización. Se aplican por catálogo con `app_apply_project_policies()`
+  tarea (ya reflejado en §3): sin ellas, un `UPDATE` o `DELETE` sin `WHERE` a
+  una novedad de un proyecto ajeno solo tendría la policy de organización. Se
+  aplican por catálogo con `app_apply_project_policies()`
   (toda tabla con `project_id` y `task_id`), que toda migración que cree una
   tabla así debe correr (CLAUDE.md §6).
 - **`app_owner` no ejecuta las funciones** (§4.3 pide `EXECUTE` solo para
@@ -389,7 +427,12 @@ exigía por los roles).
   de proyectos, sin agregar funciones fuera de la lista de §3 (por ejemplo,
   creando proyecto y membresía del creador en una sola función `SECURITY
   DEFINER` propia, o con una policy de `INSERT` acotada al instante de creación).
-  Queda sin resolver aquí a propósito.
+  **Restricción de diseño:** el acceso del creador no puede ser implícito por
+  `project.created_by_member_id`. §8 dice que `owner` y `director` pueden quitar
+  al creador y que entonces pierde el acceso; un acceso derivado de esa columna
+  no se podría quitar sin reescribir el proyecto. El creador entra como
+  `project_member` explícito, como dice §2, y la solución tiene que producir esa
+  fila, no saltearla. Queda sin resolver aquí a propósito.
 
 ## Alternativas descartadas
 

@@ -15,6 +15,12 @@ export interface PostgresHarness {
   appPool: Pool;
   /** Pool conectado como app_owner: para setup/aserciones administrativas. */
   ownerPool: Pool;
+  /**
+   * Pool conectado como el superusuario del contenedor. Solo para lo que un rol
+   * de la aplicación no puede hacer ni debería: un GRANT a nivel de base, por ejemplo,
+   * para simular una defensa rota. Los tests de comportamiento no lo usan.
+   */
+  superuserPool: Pool;
   /** Pool conectado como app_worker: el usuario de los workers y los scripts (ADR-017 §5). */
   workerPool: Pool;
   /** Connection strings crudas, para tests que necesitan configurar su propio Pool (p. ej. max: 1). */
@@ -104,12 +110,14 @@ ${bootstrap.output}`);
   const appPool = createPool({ connectionString: appUri });
   const db = createDb(appPool);
   const workerPool = createPool({ connectionString: workerUri });
+  const superuserPool = new Pool({ connectionString: superuserUri });
   const workerDb = createDb(workerPool);
 
   return {
     container,
     appPool,
     workerPool,
+    superuserPool,
     ownerPool,
     appConnectionUri: appUri,
     ownerConnectionUri: migrationUri,
@@ -120,6 +128,7 @@ ${bootstrap.output}`);
     async stop() {
       await appPool.end();
       await workerPool.end();
+      await superuserPool.end();
       await ownerPool.end();
       await container.stop();
     },

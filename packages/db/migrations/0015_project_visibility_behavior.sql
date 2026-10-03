@@ -50,6 +50,16 @@ GRANT SELECT ON auth.member TO app_rls_helper;
 -- Un miembro con varios roles ("owner,manager") NO es privilegiado acá: se
 -- compara el valor completo. Es el lado seguro (menos acceso) y coincide con
 -- que el código también se niega a elegir uno por su cuenta (parseSingleOrgRole).
+--
+-- search_path = pg_catalog, public, pg_temp, y TODA tabla y función calificada
+-- con su esquema. Es lo que el manual de Postgres exige de una función
+-- SECURITY DEFINER: para las relaciones, Postgres busca primero en el esquema
+-- temporal salvo que pg_temp figure explícito en el search_path, y estas
+-- funciones corren con BYPASSRLS en la sesión de quien las llama. Sin esto, una
+-- sesión de la API podría crear una tabla temporal project_member (o task,
+-- project, member_site_access) con filas falsas y la función la leería en vez de
+-- la real. Con el esquema explícito, la tabla temporal no se puede interponer
+-- (verificado por project-isolation-temp-tables.integration.spec.ts).
 
 -- Privilegiado: owner/director de la organización, o el contexto de sistema.
 -- El sistema se concede por la IDENTIDAD de la conexión (session_user), no por
@@ -58,7 +68,7 @@ GRANT SELECT ON auth.member TO app_rls_helper;
 -- un superusuario puede cambiar. Así la API (app_login) no puede declararse
 -- "sistema" aunque fije app.scope.
 CREATE FUNCTION app_is_privileged() RETURNS boolean
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp
 AS $fn$
   SELECT
     (nullif(current_setting('app.scope', true), '') = 'system' AND session_user = 'app_worker')
@@ -75,15 +85,15 @@ $fn$;
 -- sitio al que el miembro tiene acceso (misma definición que
 -- TenancyService.canAccessSite para manager/operator).
 CREATE FUNCTION app_full_access_project_ids() RETURNS SETOF uuid
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp
 AS $fn$
   SELECT p.id
-    FROM project p
+    FROM public.project p
    WHERE p.organization_id = nullif(current_setting('app.current_org', true), '')
      AND (
-       (SELECT app_is_privileged())
+       (SELECT public.app_is_privileged())
        OR EXISTS (
-         SELECT 1 FROM project_member pm
+         SELECT 1 FROM public.project_member pm
           WHERE pm.organization_id = p.organization_id
             AND pm.project_id = p.id
             AND pm.member_id = nullif(current_setting('app.current_member', true), '')
@@ -92,7 +102,7 @@ AS $fn$
        OR (
          p.visibility = 'site'
          AND EXISTS (
-           SELECT 1 FROM member_site_access a
+           SELECT 1 FROM public.member_site_access a
             WHERE a.organization_id = p.organization_id
               AND a.member_id = nullif(current_setting('app.current_member', true), '')
               AND a.site_id = p.site_id
@@ -105,10 +115,10 @@ $fn$;
 -- "Solo asignado": al menos una tarea asignada, no borrada, en cualquier estado
 -- (done y cancelled cuentan).
 CREATE FUNCTION app_assigned_project_ids() RETURNS SETOF uuid
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp
 AS $fn$
   SELECT DISTINCT t.project_id
-    FROM task t
+    FROM public.task t
    WHERE t.organization_id = nullif(current_setting('app.current_org', true), '')
      AND t.assignee_member_id = nullif(current_setting('app.current_member', true), '')
      AND t.deleted_at IS NULL
@@ -116,10 +126,10 @@ $fn$;
 --> statement-breakpoint
 
 CREATE FUNCTION app_assigned_task_ids() RETURNS SETOF uuid
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp
 AS $fn$
   SELECT t.id
-    FROM task t
+    FROM public.task t
    WHERE t.organization_id = nullif(current_setting('app.current_org', true), '')
      AND t.assignee_member_id = nullif(current_setting('app.current_member', true), '')
      AND t.deleted_at IS NULL
@@ -129,16 +139,16 @@ $fn$;
 -- Para la aplicación (ProjectAccessService): hay UNA sola implementación del
 -- cálculo, la de la base, y el código no la reescribe en TypeScript.
 CREATE FUNCTION app_has_full_project_access(p_project_id uuid) RETURNS boolean
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp
 AS $fn$
-  SELECT EXISTS (SELECT 1 FROM app_full_access_project_ids() f(id) WHERE f.id = p_project_id)
+  SELECT EXISTS (SELECT 1 FROM public.app_full_access_project_ids() f(id) WHERE f.id = p_project_id)
 $fn$;
 --> statement-breakpoint
 
 CREATE FUNCTION app_has_assigned_project_access(p_project_id uuid) RETURNS boolean
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp
 AS $fn$
-  SELECT EXISTS (SELECT 1 FROM app_assigned_project_ids() f(id) WHERE f.id = p_project_id)
+  SELECT EXISTS (SELECT 1 FROM public.app_assigned_project_ids() f(id) WHERE f.id = p_project_id)
 $fn$;
 --> statement-breakpoint
 
@@ -304,25 +314,25 @@ DECLARE
   part_name text;
   i integer;
 BEGIN
-  CREATE TABLE IF NOT EXISTS audit_log_default PARTITION OF audit_log DEFAULT;
-  REVOKE UPDATE, DELETE ON audit_log_default FROM app_user;
+  CREATE TABLE IF NOT EXISTS public.audit_log_default PARTITION OF public.audit_log DEFAULT;
+  REVOKE UPDATE, DELETE ON public.audit_log_default FROM app_user;
 
   FOR i IN 0 .. p_months - 1 LOOP
     month_start := (date_trunc('month', p_from) + make_interval(months => i))::date;
     part_name := 'audit_log_' || to_char(month_start, 'YYYY_MM');
     EXECUTE format(
-      'CREATE TABLE IF NOT EXISTS %I PARTITION OF audit_log FOR VALUES FROM (%L) TO (%L)',
+      'CREATE TABLE IF NOT EXISTS public.%I PARTITION OF public.audit_log FOR VALUES FROM (%L) TO (%L)',
       part_name,
       (month_start::timestamp AT TIME ZONE 'UTC')::text,
       ((month_start + interval '1 month')::timestamp AT TIME ZONE 'UTC')::text
     );
-    EXECUTE format('REVOKE UPDATE, DELETE ON %I FROM app_user', part_name);
+    EXECUTE format('REVOKE UPDATE, DELETE ON public.%I FROM app_user', part_name);
   END LOOP;
 
-  PERFORM app_apply_tenant_policies();
-  PERFORM app_apply_audit_project_policies();
+  PERFORM public.app_apply_tenant_policies();
+  PERFORM public.app_apply_audit_project_policies();
 END;
-$fn$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_catalog;
+$fn$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp;
 --> statement-breakpoint
 
 -- ---------------------------------------------------------------------------
