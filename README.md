@@ -96,15 +96,39 @@ Clonar `main` (el deploy no acepta otra rama). En el server (`ssh lomaro@192.168
 git clone https://github.com/omarlpizarro/orquestacion.git ~/orquestacion
 cd ~/orquestacion
 cp infra/docker/server.env.example infra/docker/.env
-# Reemplazá cada CHANGE_ME por `openssl rand -hex 24`.
+# Reemplazá cada CHANGE_ME por `openssl rand -hex 32`.
 $EDITOR infra/docker/.env
 scripts/deploy.sh
 ```
 
-Los roles de Postgres (`app_owner`, `app_login`) se crean una sola vez, al
-inicializar el volumen, con los passwords que haya en `.env` en ese momento.
-Cambiar un password después en `.env` no cambia el de la base: hay que
-cambiarlo con `ALTER ROLE` o recrear el volumen.
+Los roles de Postgres (`app_owner`, `app_login`, `app_worker`,
+`app_rls_helper`) los crea `packages/db/sql/ensure-roles.sql` al inicializar el
+volumen, con los passwords que haya en `.env` en ese momento. Cambiar un
+password después en `.env` no cambia el de la base: hay que cambiarlo con
+`ALTER ROLE` o recrear el volumen.
+
+### Roles de Postgres en un ambiente que ya existe
+
+El script de inicio de Postgres solo corre con el volumen vacío, así que en un
+server que ya tiene datos los roles nuevos (`app_worker` y `app_rls_helper`,
+ADR-017) no se crean solos. `ensure-roles.sql` es idempotente y se corre **una
+vez, a mano, antes del `deploy.sh` que trae las migraciones que dependen de
+ellos** (la migración falla con un mensaje claro si no los encuentra):
+
+```bash
+cd ~/orquestacion
+git pull --ff-only                       # trae ensure-roles.sql al bind mount /bootstrap-sql
+$EDITOR infra/docker/.env                # agregá APP_WORKER_PASSWORD=<openssl rand -hex 32>
+set -a; . infra/docker/.env; set +a      # las contraseñas quedan en el entorno del shell
+scripts/compose.sh exec -T   -e APP_OWNER_PASSWORD -e APP_LOGIN_PASSWORD -e APP_WORKER_PASSWORD   postgres psql -v ON_ERROR_STOP=1 -U postgres -d orquestacion   -f /bootstrap-sql/ensure-roles.sql
+```
+
+`-e NOMBRE` sin `=valor` copia la variable del entorno del shell al proceso: la
+contraseña no aparece en la línea de comando ni en `ps`. `ensure-roles.sql` la
+lee con `getenv`; no cambia la contraseña de un rol que ya existe y vuelve a
+afirmar los atributos de cada uno. Termina con una verificación que aborta si
+`app_rls_helper` tiene alguna membresía o si algún otro rol no superusuario tiene
+`BYPASSRLS`. Se puede repetir sin riesgo.
 
 ### Cada deploy
 
@@ -133,7 +157,7 @@ commit a desplegar sea ancestro de `origin/main` (`git merge-base --is-ancestor`
 `origin/main` misma, o cualquier versión anterior. `deploy.sh` se niega si no
 lo es, si el árbol está sucio, si el pull no se hace desde `main` o si `main`
 local tiene commits que no están en `origin/main`; no hay flag para saltearlo.
-También se niega con algún `CHANGE_ME` en `.env`, o si el puerto de la API lo
+También se niega con algún `CHANGE_ME` en `.env`, con `APP_WORKER_PASSWORD` vacía o ausente, o si el puerto de la API lo
 usa otro proceso.
 
 Las decisiones detrás de este mecanismo (Compose a mano en vez de Coolify,

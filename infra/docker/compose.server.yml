@@ -22,11 +22,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?Falta POSTGRES_SUPERUSER_PASSWORD en infra/docker/.env}
       APP_OWNER_PASSWORD: ${APP_OWNER_PASSWORD:?Falta APP_OWNER_PASSWORD en infra/docker/.env}
       APP_LOGIN_PASSWORD: ${APP_LOGIN_PASSWORD:?Falta APP_LOGIN_PASSWORD en infra/docker/.env}
-      # Opcional a propósito en este PR: solo lo lee el script de inicio, que
-      # corre únicamente con el volumen vacío. Exigirlo con `:?` rompería el
-      # `docker compose` del servidor que ya existe, donde nada lo usa todavía.
-      # Un volumen nuevo sin esta variable falla fuerte en el script de inicio.
-      APP_WORKER_PASSWORD: ${APP_WORKER_PASSWORD:-}
+      # Obligatoria desde ADR-017: la lee ensure-roles.sql y, sin ella, el
+      # usuario de los workers no existe.
+      APP_WORKER_PASSWORD: ${APP_WORKER_PASSWORD:?Falta APP_WORKER_PASSWORD en infra/docker/.env}
     # Sin `ports:` a propósito. Postgres solo es alcanzable desde la red
     # interna de este proyecto (`orquestacion_default`), nunca desde el host
     # ni desde la LAN. Para inspeccionar: `scripts/compose.sh exec postgres psql ...`.
