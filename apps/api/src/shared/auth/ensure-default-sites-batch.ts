@@ -1,6 +1,6 @@
 import { newId } from '@orq/contracts';
 import type { Db } from '@orq/db';
-import { withSystemTransaction, withTenantTransaction } from '@orq/db';
+import { withoutTenantTransaction, withTenantTransaction } from '@orq/db';
 import { sql } from 'drizzle-orm';
 import { ensureDefaultSite } from './ensure-default-site.js';
 import { grantAccessToSingleSite } from './member-site-access.js';
@@ -83,13 +83,13 @@ export async function ensureDefaultSitesForAllOrganizations(
   let memberAccessGranted = 0;
   const failed: Array<{ organizationId: string; error: unknown }> = [];
 
-  const organizations = await withSystemTransaction(db, { requestId: newId() }, (tx) =>
+  const organizations = await withoutTenantTransaction(db, { requestId: newId() }, (tx) =>
     tx.execute<{ id: string }>(sql`select id from auth.organization order by created_at asc`),
   );
 
   for (const { id: organizationId } of organizations.rows) {
     try {
-      const owner = await withSystemTransaction(db, { requestId: newId() }, (tx) =>
+      const owner = await withoutTenantTransaction(db, { requestId: newId() }, (tx) =>
         tx.execute<{ id: string }>(sql`
           select id from auth.member
           where organization_id = ${organizationId}

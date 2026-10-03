@@ -1,5 +1,5 @@
 import { loadWorkerEnv } from '@orq/config';
-import { createDb, createPool, withSystemTransaction } from '@orq/db';
+import { createDb, createPool, withoutTenantTransaction } from '@orq/db';
 import { sql } from 'drizzle-orm';
 import { PgBoss } from 'pg-boss';
 
@@ -29,8 +29,8 @@ async function main() {
   await boss.work(QUEUE_HEALTH_PING, async () => {
     // Un job que procesa varios tenants abre una transacción por tenant
     // (CLAUDE.md §7); este worker de ejemplo no toca tablas de negocio, así
-    // que corre por withSystemTransaction, con un `requestId` propio por job.
-    await withSystemTransaction(db, { requestId: crypto.randomUUID() }, async (tx) => {
+    // que corre por withoutTenantTransaction, con un `requestId` propio por job.
+    await withoutTenantTransaction(db, { requestId: crypto.randomUUID() }, async (tx) => {
       await tx.execute(sql`select 1`);
     });
     console.log('health.ping procesado');

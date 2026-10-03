@@ -183,7 +183,7 @@ CREATE TABLE project (
 
 `site_id` es `NOT NULL` (ADR-013): toda organización tiene al menos un sitio por defecto, creado junto con ella (`organizationHooks.afterCreateOrganization` de better-auth), así que ningún proyecto se crea sin sitio. El fallback de zona horaria de ADR-008 (`organization_profile.timezone` cuando no hay sitio) sigue existiendo como defensa ante un `site_id` null que no debería ocurrir con la columna `NOT NULL`, no como caso de negocio esperado.
 
-`visibility` (ADR-017) decide quién ve el proyecto además de `owner`/`director`: `reserved` (por defecto) solo a sus miembros explícitos y a quien tenga una tarea asignada en él; `site` a cualquiera con acceso al sitio. La migración `0012` agrega la columna con los proyectos que ya existían en `site` (para no cambiar lo que ven) y deja `reserved` como default de los nuevos. **Hasta el PR de comportamiento de ADR-017 nada lee esta columna**: la base la guarda y la audita, pero ninguna policy ni ningún caso de uso la usa todavía. El `CHECK` entró `NOT VALID` y se valida en un despliegue posterior (ver "Migraciones").
+`visibility` (ADR-017) decide quién ve el proyecto además de `owner`/`director`: `reserved` (por defecto) solo a sus miembros explícitos y a quien tenga una tarea asignada en él; `site` a cualquiera con acceso al sitio. La migración `0012` agrega la columna con los proyectos que ya existían en `site` (para no cambiar lo que ven) y deja `reserved` como default de los nuevos. Desde `0015` la leen las funciones auxiliares de RLS (ver "RLS por proyecto"). El `CHECK` entró `NOT VALID` en `0012` y se validó en `0013`, un despliegue posterior (ver "Migraciones").
 
 ```sql
 CREATE TABLE project_member (
@@ -718,16 +718,14 @@ script a mano y no hace nada útil en producción.
 tabla (`0012`), cuando existe — no en el bootstrap de roles, que corre antes
 de que haya una sola tabla.
 
-Dos roles más (ADR-017), también creados por `bootstrap-roles.sql`:
+Dos roles más (ADR-017), creados por `ensure-roles.sql`:
 
 - `app_worker` (login, hereda de `app_user`, sin `BYPASSRLS`): el usuario de base de los workers y los scripts, distinto de `app_login`. Las funciones auxiliares de RLS por proyecto conceden el privilegio de sistema solo si la sesión se abrió con este usuario (`session_user`).
-- `app_rls_helper` (`NOLOGIN`, `BYPASSRLS`): dueño de esas funciones y de nada más. Es el único rol con `BYPASSRLS`; ningún otro rol puede asumirlo (sin membresías, sin `SET ROLE`). Sus permisos de tabla (solo `SELECT`, solo sobre lo que las funciones leen) los otorga la migración del PR de comportamiento.
+- `app_rls_helper` (`NOLOGIN`, `BYPASSRLS`): dueño de esas funciones y de nada más. Es el único rol con `BYPASSRLS`; ningún otro rol puede asumirlo (sin membresías, sin `SET ROLE`). Sus permisos son solo `SELECT` sobre lo que las funciones leen y los otorga la migración `0015`.
 
-Los roles y las extensiones (`btree_gist`, `pg_trgm`, `pgcrypto`, `ltree`) se
-crean en `packages/db/sql/bootstrap-roles.sql`, ejecutado por un superusuario,
-no por una migración de Drizzle: algunas extensiones y la creación de roles
-necesitan privilegios que `app_owner` no tiene, y los passwords de
-`app_owner`/`app_login`/`app_worker` no pueden vivir en una migración versionada en git.
+Los roles se crean en `packages/db/sql/ensure-roles.sql`, **idempotente y única fuente**: lo corre el init de Postgres al crear el volumen, el arnés de tests y, a mano, un superusuario en un ambiente que ya existe (ver README). Lee las contraseñas del entorno con `getenv` de psql (nunca por la línea de comando ni con `sed`), no cambia la de un rol que ya existe, reafirma los atributos en cada corrida y termina verificando que `app_rls_helper` no tiene membresías y que ningún otro rol no superusuario tiene `BYPASSRLS`. Las extensiones (`btree_gist`, `pg_trgm`, `pgcrypto`, `ltree`) y el dueño del esquema `public` van en `bootstrap-roles.sql`, que corre después. Ninguno de los dos va en una migración de Drizzle: la creación de roles y algunas extensiones necesitan privilegios que `app_owner` no tiene, y los passwords no pueden vivir en una migración versionada en git.
+
+**El puente de dueño.** Las funciones auxiliares las crea `app_owner` (migración) pero tienen que ser de `app_rls_helper`, y un rol que no es superusuario no puede ceder una función a otro sin poder asumirlo. Dar esa membresía a `app_owner` (`WITH ADMIN OPTION`) le permitiría además otorgar el rol auxiliar a cualquiera, incluido el de la API. Por eso `ensure-roles.sql` crea `app_transfer_rls_helper_function(regprocedure, boolean)`: dueño superusuario, `SECURITY DEFINER`, `search_path = pg_catalog`, `EXECUTE` solo para `app_owner`. Traspasa solo las seis firmas de una lista **escrita en el propio puente**, y antes valida las condiciones del ADR: dueño actual `app_owner`, `SECURITY DEFINER`, `STABLE`, `search_path = public, pg_catalog`, lenguaje `sql`/`plpgsql`, retorno `boolean` o `setof uuid`, sin `EXECUTE` para `PUBLIC`. Sumar una función con `BYPASSRLS` exige modificar `ensure-roles.sql` y que una persona con acceso de superusuario lo vuelva a correr: es un control humano deliberado, no una limitación. Para corregir el cuerpo de una función ya traspasada, la migración la devuelve (`(función, false)`), hace `CREATE OR REPLACE`, vuelve a fijar los permisos y la traspasa otra vez, todo en la misma transacción.
 
 ### Policy estándar
 
@@ -745,6 +743,16 @@ CREATE POLICY task_tenant_isolation ON task
 El `nullif(..., '')` sigue valiendo la pena aunque `organization_id` sea `text` (ADR-010) y ya no haga falta castear nada: la primera vez que una conexión toca un GUC custom como `app.current_org` con `set_config(..., true)`, Postgres registra un placeholder para esa conexión con valor por defecto `''` (no `NULL`). Al terminar esa transacción (commit o rollback), el valor vuelve a `''`, nunca a `NULL`, aunque nunca se hubiera seteado antes en esa conexión. Sin el `nullif`, una transacción de sistema (que no setea `app.current_org`) que reutiliza una conexión del pool ya tocada por una transacción de tenant compara `organization_id = ''` en vez de `organization_id = NULL` — el resultado práctico es el mismo (ninguna fila real tiene `organization_id = ''`, así que sigue sin ver nada), pero `NULL` deja explícito que el contexto está "sin tenant", no "tenant vacío".
 
 La misma policy se aplica a todas las tablas con `organization_id`, **también a las particionadas y a cada una de sus particiones** (`app_apply_tenant_policies()` recorre `relkind` `r` y `p` desde `0012`): las policies del padre no se consultan cuando alguien lee una partición por su nombre, así que cada partición lleva las suyas. Conviene generarla en la migración recorriendo el catálogo, no escribirla 25 veces a mano.
+
+### RLS por proyecto (ADR-017)
+
+Segundo eje de acceso, además de la organización: un proyecto `reserved` (el default) solo lo ve quien es miembro explícito (`project_member`) o tiene una tarea asignada en él; uno `site`, cualquiera con acceso a su sitio; `owner` y `director` ven todo. Nunca se guarda: lo calculan seis funciones `STABLE SECURITY DEFINER` de `app_rls_helper` (`app_is_privileged()`, `app_full_access_project_ids()`, `app_assigned_project_ids()`, `app_assigned_task_ids()`, `app_has_full_project_access(uuid)`, `app_has_assigned_project_access(uuid)`), que filtran siempre por `app.current_org` y devuelven solo booleanos o listas de ids. Si las policies de `project` y `task` se leyeran entre sí, Postgres fallaría con `infinite recursion detected in policy`; las funciones cortan el ciclo.
+
+Las policies son `RESTRICTIVE` y por comando: se suman (AND) a la `<tabla>_tenant_isolation` permisiva de arriba, que no cambia. `task`: `SELECT`/`UPDATE`/`DELETE` con privilegiado, acceso completo o tarea asignada; `INSERT` **sin** la rama asignada. `project`: lo mismo con el proyecto asignado; `INSERT` solo por organización. `project_member`: privilegiado o acceso completo (el asignado no ve quién más participa). `audit_log` (padre y particiones): `SELECT` para privilegiados y acceso completo al `project_id` de la entrada. Las hijas de una tarea (toda tabla con `project_id` y `task_id`, hoy `task_update`) las recibe `app_apply_project_policies()`: `SELECT`/`INSERT`/`UPDATE`/`DELETE` con acceso completo o tarea asignada. El ADR nombra solo `SELECT` e `INSERT`; `UPDATE` y `DELETE` se agregaron porque sin ellos un `UPDATE` o `DELETE` sin `WHERE` solo tendría la policy de organización.
+
+**Sistema.** `app_is_privileged()` es verdadera por sistema solo si `app.scope = 'system'` **y** `session_user = 'app_worker'`. `withSystemTransaction` (`@orq/db/system`) fija la organización y el scope; el privilegio lo concede la identidad de la conexión, no el GUC, así que la API (`app_login`) no puede declararse sistema. Un miembro con varios roles (`"owner,manager"`) **no** es privilegiado en SQL: se compara el valor completo, el lado seguro.
+
+**`app_owner` no puede ejecutar las funciones** (solo `app_user`, por el ADR): una consulta de `app_owner` sobre una tabla con policies por proyecto falla con `permission denied for function`. Las migraciones con backfill ya bajaban `FORCE` temporalmente; los tests que ejercen al dueño hacen lo mismo dentro de su transacción.
 
 ### Cómo se setea el contexto
 
@@ -998,18 +1006,20 @@ slices siguientes contra una conexión que en los hechos ignora las policies.
 | `0010` | `project_site_id_not_null_validate` | `VALIDATE CONSTRAINT` + `ALTER COLUMN site_id SET NOT NULL` + `DROP` el CHECK temporal de `0009`, en despliegue separado (ADR-013) | Hecha |
 | `0011` | `member_site_access_drop_role` | `DROP COLUMN role` de `member_site_access` (ADR-015: la tabla significa solo "este miembro trabaja en este sitio", el rol sale de la organización). Excepción razonada a la regla 7: ningún código la usó nunca y la tabla está vacía | Hecha |
 | `0012` | `project_visibility_structure` | ADR-017, PR de estructura: `project.visibility`, `project_member`, `task_update.project_id` (nullable + `CHECK ... NOT VALID` + FK compuesta `NOT VALID`; trigger que lo llena), `UNIQUE (organization_id, id, project_id)` en `task`, inmutabilidad de `project_id`, `audit_log` particionada (mes actual + 12 + `DEFAULT`) con triggers de `project`/`project_member`, `app_apply_tenant_policies()` también para tablas particionadas. No cambia comportamiento. Los roles `app_worker`/`app_rls_helper` van en `bootstrap-roles.sql`, no en una migración | Hecha |
-| `0013` | `project_visibility_validate` | `VALIDATE CONSTRAINT` de `project_visibility_check`, de la FK compuesta y del `CHECK` de `task_update.project_id`, `SET NOT NULL` y `DROP` del `CHECK` temporal. Despliegue posterior a `0012`, **nunca en la misma corrida del migrador** (CLAUDE.md §6). Se escribe a mano: `drizzle-kit generate` no ve diferencia porque el esquema ya declara el estado final | Pendiente |
-| `0014` | `templates` | `sop_template`, `sop_template_task` | Pendiente |
-| `0015` | `custom_fields` | `custom_field_definition`, índices GIN | Pendiente |
-| `0016` | `resources` | `resource`, `resource_booking` con la exclusion constraint | Pendiente |
-| `0017` | `dependencies` | `task_dependency`, función anti-ciclos, `schedule_change` | Pendiente |
-| `0018` | `collaboration` (resto) | `attachment`, `task_acknowledgement` | Pendiente |
-| `0019` | `audit` | Resto del audit trail del paso 8: triggers de `task` y demás, job de particiones y retención. `audit_log` y `audit_trigger()` ya existen desde `0012` | Pendiente |
-| `0020` | `notifications` | `notification`, `notification_preference`, `escalation_policy` | Pendiente |
-| `0021` | `sync` | Publicación lógica, `wal_level` (ya no `mutation_log`, adelantada a `0004`) | Pendiente |
-| `0022` | `billing` | `plan`, `subscription`, `payment_event`, `usage_counter` | Pendiente |
-| `0023` | `analytics` | `project_kpi` materializada y su job de refresco | Pendiente |
-| `0024` | `seed` | Planes, plantillas SOP por industria, catálogos iniciales | Pendiente |
+| `0013` | `validate_project_visibility_structure` | `VALIDATE CONSTRAINT` de `project_visibility_check`, de la FK compuesta y del `CHECK` de `task_update.project_id`, `SET NOT NULL` y `DROP` del `CHECK` temporal. Despliegue posterior a `0012`, **nunca en la misma corrida del migrador** (CLAUDE.md §6). Se escribe a mano: `drizzle-kit generate` no ve diferencia porque el esquema ya declara el estado final | Hecha |
+| `0014` | `task_assignee_project_index` | `(organization_id, assignee_member_id, project_id)` parcial `WHERE deleted_at IS NULL`: el acceso "solo asignado" de ADR-017 se deriva de `task` | Hecha |
+| `0015` | `project_visibility_behavior` | ADR-017, PR de comportamiento: las seis funciones auxiliares de RLS (traspasadas a `app_rls_helper` por el puente de `ensure-roles.sql`), `SELECT` del rol auxiliar, policies `RESTRICTIVE` por comando sobre `task`, `project`, `project_member`, `audit_log` y sus particiones y las hijas de una tarea (`app_apply_project_policies()`). Exige haber corrido `ensure-roles.sql` antes (falla con un mensaje claro si no) | Hecha |
+| `0016` | `templates` | `sop_template`, `sop_template_task` | Pendiente |
+| `0017` | `custom_fields` | `custom_field_definition`, índices GIN | Pendiente |
+| `0018` | `resources` | `resource`, `resource_booking` con la exclusion constraint | Pendiente |
+| `0019` | `dependencies` | `task_dependency`, función anti-ciclos, `schedule_change` | Pendiente |
+| `0020` | `collaboration` (resto) | `attachment`, `task_acknowledgement` | Pendiente |
+| `0021` | `audit` | Resto del audit trail del paso 8: triggers de `task` y demás, job de particiones y retención. `audit_log` y `audit_trigger()` ya existen desde `0012` | Pendiente |
+| `0022` | `notifications` | `notification`, `notification_preference`, `escalation_policy` | Pendiente |
+| `0023` | `sync` | Publicación lógica, `wal_level` (ya no `mutation_log`, adelantada a `0004`) | Pendiente |
+| `0024` | `billing` | `plan`, `subscription`, `payment_event`, `usage_counter` | Pendiente |
+| `0025` | `analytics` | `project_kpi` materializada y su job de refresco | Pendiente |
+| `0026` | `seed` | Planes, plantillas SOP por industria, catálogos iniciales | Pendiente |
 
 `0009`/`0010` (site_id obligatorio, ADR-013) no estaban en el plan original — se adelantan por la misma razón que `mutation_log` y `task_update`: el alcance por sitio, que sigue en fase 2, necesita la columna cerrada primero. Corrieron ellas dos en el lugar de `templates`/`custom_fields`, que se corren un lugar cada una.
 

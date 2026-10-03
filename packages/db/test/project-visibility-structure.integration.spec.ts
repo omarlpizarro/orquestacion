@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { insertAuthMember } from '../src/testing/auth-fixtures.js';
 import { type PostgresHarness, startPostgresHarness } from '../src/testing/postgres-harness.js';
 import type { Tx } from '../src/transaction.js';
 import { withTenantTransaction } from '../src/transaction.js';
@@ -15,6 +16,10 @@ describe('estructura de visibilidad de proyectos (0012)', () => {
   let harness: PostgresHarness;
   const orgA = `org_a_${randomUUID().replaceAll('-', '')}`;
   const orgB = `org_b_${randomUUID().replaceAll('-', '')}`;
+  // Dueño de las dos organizaciones: este archivo prueba la ESTRUCTURA (0012),
+  // no quién ve qué. Las policies por proyecto (0015) exigen que el miembro
+  // exista en auth.member, y un owner las atraviesa todas; la matriz de
+  // acceso vive en project-isolation.integration.spec.ts.
   const member = `member_${randomUUID().replaceAll('-', '')}`;
   let siteA: string;
   let projectA: string;
@@ -30,7 +35,7 @@ describe('estructura de visibilidad de proyectos (0012)', () => {
   const asB = <T>(run: (tx: Tx) => Promise<T>) =>
     withTenantTransaction(
       harness.db,
-      { organizationId: orgB, memberId: member, requestId: randomUUID() },
+      { organizationId: orgB, memberId: `${member}_b`, requestId: randomUUID() },
       run,
     );
 
@@ -68,6 +73,16 @@ describe('estructura de visibilidad de proyectos (0012)', () => {
       insert into auth.organization (id, name, slug, created_at) values
         (${orgA}, 'Org A', ${orgA}, now()), (${orgB}, 'Org B', ${orgB}, now())
     `);
+    await insertAuthMember(harness.ownerDb, {
+      organizationId: orgA,
+      memberId: member,
+      role: 'owner',
+    });
+    await insertAuthMember(harness.ownerDb, {
+      organizationId: orgB,
+      memberId: `${member}_b`,
+      role: 'owner',
+    });
     siteA = randomUUID();
     await asA((tx) =>
       tx.execute(sql`
@@ -242,14 +257,16 @@ describe('estructura de visibilidad de proyectos (0012)', () => {
     });
 
     it('también vale para el dueño del esquema (el trigger no distingue roles)', async () => {
-      // El dueño también está sujeto a RLS (FORCE): sin contexto de
-      // organización no vería la fila y el UPDATE no dispararía nada.
+      // El dueño también está sujeto a RLS (FORCE), y desde 0015 las policies por
+      // proyecto llaman funciones a las que app_owner no tiene EXECUTE (solo
+      // app_user, ADR-017 §4). Se baja FORCE dentro de la transacción de la
+      // prueba —el error esperado la deshace— para que el UPDATE llegue al
+      // trigger, que es lo que se quiere ver.
       await expectPgError(
-        withTenantTransaction(
-          harness.ownerDb,
-          { organizationId: orgA, memberId: member, requestId: randomUUID() },
-          (tx) => tx.execute(sql`update task set project_id = ${projectA2} where id = ${taskA}`),
-        ),
+        harness.ownerDb.transaction(async (tx) => {
+          await tx.execute(sql`alter table task no force row level security`);
+          await tx.execute(sql`update task set project_id = ${projectA2} where id = ${taskA}`);
+        }),
         '23000',
       );
     });

@@ -11,12 +11,12 @@ interface Row {
 }
 
 function buildHandler(row: Row | undefined, appRole = 'app_login') {
-  const withSystem = vi.fn(
+  const withoutTenant = vi.fn(
     async (fn: (tx: { execute: () => Promise<{ rows: Row[] }> }) => unknown) =>
       fn({ execute: async () => ({ rows: row ? [row] : [] }) }),
   );
   // Test double: solo necesitamos el método que el handler usa.
-  const transactions = { withSystem } as unknown as TransactionService;
+  const transactions = { withoutTenant } as unknown as TransactionService;
   return new GetHealthHandler(transactions, {
     DATABASE_APP_ROLE: appRole,
     GIT_COMMIT: 'abc1234',

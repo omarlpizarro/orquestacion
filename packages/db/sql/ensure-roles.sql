@@ -96,6 +96,112 @@ alter role app_rls_helper nologin nosuperuser nocreatedb nocreaterole bypassrls;
 grant app_user to app_login;
 grant app_user to app_worker;
 
+-- ---------------------------------------------------------------------------
+-- Puente de dueño de las funciones auxiliares de RLS (ADR-017 §4).
+-- ---------------------------------------------------------------------------
+-- Las funciones auxiliares tienen que ser de app_rls_helper (el único rol con
+-- BYPASSRLS), pero las migraciones las crea app_owner, y un rol que no es
+-- superusuario no puede cederle una función a otro sin poder asumirlo
+-- (verificado: "must be able to SET ROLE"), ni sin que el destino tenga CREATE
+-- en el esquema. Dar esa membresía a app_owner (WITH ADMIN OPTION) le permitiría
+-- además otorgar el rol auxiliar a cualquiera, incluido el de la API: una línea
+-- equivocada en una migración le daría a la API un BYPASSRLS. Por eso el
+-- traspaso lo hace esta función, que es del superusuario que corre este script.
+--
+-- Es un control humano deliberado, no una limitación: la lista de abajo está
+-- escrita acá y no en una tabla ni en un argumento. Sumar una función auxiliar
+-- (o cambiar su firma) exige modificar este archivo y que una persona con
+-- acceso de superusuario lo vuelva a correr. Ninguna migración puede ampliarla.
+--
+-- Antes de traspasar valida las condiciones de ADR-017 §4, no solo el nombre:
+-- firma exacta de la lista, esquema public, SECURITY DEFINER, STABLE,
+-- search_path fijado, lenguaje sql o plpgsql, retorno boolean o setof uuid y
+-- sin EXECUTE para PUBLIC. Si algo no cumple, rechaza.
+--
+-- Corregir el cuerpo de una función ya traspasada: app_owner dejó de ser su
+-- dueño y no puede reemplazarla. La migración que la corrige la devuelve con
+-- (función, false), hace CREATE OR REPLACE, vuelve a fijar los permisos y la
+-- traspasa otra vez con (función, true), todo en la misma transacción. Devolver
+-- exige solo que la función esté en la lista y sea hoy del rol auxiliar.
+create or replace function public.app_transfer_rls_helper_function(
+  p_function regprocedure,
+  p_to_helper boolean
+) returns void
+language plpgsql
+security definer
+set search_path = pg_catalog
+as $bridge$
+declare
+  allowed constant text[] := array[
+    'public.app_is_privileged()',
+    'public.app_full_access_project_ids()',
+    'public.app_assigned_project_ids()',
+    'public.app_assigned_task_ids()',
+    'public.app_has_full_project_access(uuid)',
+    'public.app_has_assigned_project_access(uuid)'
+  ];
+  signature constant text := p_function::text;
+  f pg_proc%rowtype;
+  language_name text;
+begin
+  if p_function is null or p_to_helper is null then
+    raise exception 'app_transfer_rls_helper_function: los dos argumentos son obligatorios.';
+  end if;
+
+  if not (signature = any (allowed)) then
+    raise exception 'La función % no está en la lista fija del puente (%). Sumar una función auxiliar exige modificar ensure-roles.sql y volver a correrlo.',
+      signature, array_to_string(allowed, ', ');
+  end if;
+
+  select * into f from pg_proc where oid = p_function::oid;
+
+  if not p_to_helper then
+    if f.proowner <> 'app_rls_helper'::regrole then
+      raise exception 'La función % no es de app_rls_helper (es de %): no hay nada que devolver.',
+        signature, f.proowner::regrole;
+    end if;
+    execute format('alter function %s owner to app_owner', p_function);
+    return;
+  end if;
+
+  if f.proowner <> 'app_owner'::regrole then
+    raise exception 'La función % debe ser de app_owner para traspasarla (es de %).',
+      signature, f.proowner::regrole;
+  end if;
+  if f.prokind <> 'f' then
+    raise exception 'La función % debe ser una función común.', signature;
+  end if;
+  if not f.prosecdef then
+    raise exception 'La función % debe ser SECURITY DEFINER.', signature;
+  end if;
+  if f.provolatile <> 's' then
+    raise exception 'La función % debe ser STABLE.', signature;
+  end if;
+  if f.proconfig is null or not (f.proconfig @> array['search_path=public, pg_catalog']) then
+    raise exception 'La función % debe fijar SET search_path = public, pg_catalog.', signature;
+  end if;
+  select l.lanname into language_name from pg_language l where l.oid = f.prolang;
+  if language_name not in ('sql', 'plpgsql') then
+    raise exception 'La función % debe estar escrita en sql o plpgsql (es %).', signature, language_name;
+  end if;
+  if not (f.prorettype = 'boolean'::regtype or (f.prorettype = 'uuid'::regtype and f.proretset)) then
+    raise exception 'La función % debe devolver boolean o setof uuid (devuelve %).',
+      signature, case when f.proretset then 'setof ' else '' end || f.prorettype::regtype;
+  end if;
+  if f.proacl is null or exists (
+    select 1 from aclexplode(f.proacl) a where a.grantee = 0
+  ) then
+    raise exception 'La función % no debe tener EXECUTE para PUBLIC (REVOKE ALL ... FROM PUBLIC antes de traspasarla).',
+      signature;
+  end if;
+
+  execute format('alter function %s owner to app_rls_helper', p_function);
+end
+$bridge$;
+
+revoke all on function public.app_transfer_rls_helper_function(regprocedure, boolean) from public;
+grant execute on function public.app_transfer_rls_helper_function(regprocedure, boolean) to app_owner;
+
 -- Verificación final: si algo de lo que garantiza ADR-017 §4 no se cumple, esto
 -- aborta en vez de dejar el ambiente a medias.
 do $verify$
@@ -112,6 +218,18 @@ begin
    where member.rolname = 'app_rls_helper' or grp.rolname = 'app_rls_helper';
   if offender is not null then
     raise exception 'app_rls_helper tiene membresías (%): ADR-017 exige que ningún rol pueda asumirlo.', offender;
+  end if;
+
+  -- El puente concede un traspaso de dueño que ningún rol de la aplicación puede
+  -- hacer por su cuenta: si su dueño no es un superusuario, no es el control que
+  -- el ADR describe (o este script lo corrió quien no debía).
+  select r.rolname into offender
+    from pg_proc p
+    join pg_roles r on r.oid = p.proowner
+   where p.oid = 'public.app_transfer_rls_helper_function(regprocedure, boolean)'::regprocedure
+     and not r.rolsuper;
+  if offender is not null then
+    raise exception 'El puente app_transfer_rls_helper_function es de % y no de un superusuario: volvé a correr este script como superusuario.', offender;
   end if;
 
   -- Ningún otro rol no superusuario puede tener BYPASSRLS.

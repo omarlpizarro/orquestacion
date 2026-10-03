@@ -146,6 +146,14 @@ export const task = pgTable(
     index('task_org_assignee_status_planned_end_idx')
       .on(table.organizationId, table.assigneeMemberId, table.status, table.plannedEndAt)
       .where(sql`${table.deletedAt} is null`),
+    // ADR-017: el acceso "solo asignado" se deriva de `task` (sin tabla propia).
+    // Lo consultan las funciones auxiliares de RLS por cada sentencia sobre
+    // `task`, `task_update` y `project`; sin este índice es un barrido por
+    // organización. Parcial por lo mismo que el de Mi Día: una tarea borrada no
+    // da acceso.
+    index('task_org_assignee_project_idx')
+      .on(table.organizationId, table.assigneeMemberId, table.projectId)
+      .where(sql`${table.deletedAt} is null`),
     // findLastSiblingPosition (create-task, PR 1): faltaba desde ese PR, se
     // agrega acá para no generar una migración que solo agrega un índice
     // (docs/phase-2-brief.md).

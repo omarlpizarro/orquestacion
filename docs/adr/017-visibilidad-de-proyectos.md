@@ -156,7 +156,7 @@ un metatest:
    él: solo es el dueño de las funciones.
 3. **Mínimo privilegio.** Solo `SELECT`, y solo sobre las tablas que las
    funciones leen (`project`, `project_member`, `task`, `member_site_access`,
-   `auth.member`). Dueño de esas funciones y de nada más. Cada función filtra
+   `auth.member`). Dueño de esas funciones y de nada más (el traspaso lo hace un puente del superusuario, ver "Actualización del PR de comportamiento"). Cada función filtra
    siempre por `organization_id = app.current_org`; llamada con la organización
    de otro tenant no devuelve nada de la primera.
 
@@ -314,6 +314,82 @@ En un Postgres 17 descartable, con tablas y roles mínimos equivalentes:
 **No se verificó** si alguna variante sin `BYPASSRLS` corta el ciclo, y
 `session_user` como base de la identidad de sistema se verifica contra el
 Postgres real en el PR de comportamiento (ver Plan).
+
+## Actualización del PR de comportamiento (2026-10-03)
+
+Lo que apareció al implementar y no estaba en el texto de arriba. Las decisiones
+son de Omar; acá queda el porqué.
+
+### El traspaso de dueño de las funciones: un puente del superusuario
+
+Verificado en un Postgres 17: `app_owner` (quien corre las migraciones) no puede
+fijar a `app_rls_helper` como dueño de una función (`ALTER FUNCTION ... OWNER TO`
+falla con "must be able to SET ROLE"), y aun con membresía falla con "permission
+denied for schema public" salvo que el rol auxiliar tenga `CREATE` en `public`.
+Resolverlo con una membresía `WITH ADMIN OPTION` de `app_owner` en el rol auxiliar
+se descartó: ese permiso le deja otorgar el rol a cualquier otro, incluido el de
+la API, así que una línea equivocada en una migración le daría a la API un rol con
+`BYPASSRLS`.
+
+En su lugar, `packages/db/sql/ensure-roles.sql` (que ya corre un superusuario)
+crea `app_transfer_rls_helper_function(regprocedure, boolean)`:
+
+- Dueño: el superusuario que corre el script. `SECURITY DEFINER`, `search_path =
+  pg_catalog`, `EXECUTE` revocado a `PUBLIC` y otorgado solo a `app_owner`.
+- **Lista fija escrita en el propio puente**, por firma exacta (las seis de §3).
+  Sumar una función con `BYPASSRLS` exige modificar `ensure-roles.sql` y que una
+  persona con acceso de superusuario lo vuelva a correr: es un control humano
+  deliberado, no una limitación. Ninguna migración puede ampliar la lista.
+- Antes de traspasar valida las condiciones de §4, no solo el nombre: esquema
+  `public`, dueño actual `app_owner`, `prosecdef`, `STABLE`, `search_path` fijado
+  en `proconfig`, lenguaje `sql`/`plpgsql`, retorno `boolean` o `setof uuid` y sin
+  `EXECUTE` para `PUBLIC`. Si algo no cumple, rechaza con un mensaje claro.
+- **Corregir el cuerpo de una función ya traspasada.** `app_owner` dejó de ser su
+  dueño y no puede reemplazarla. El camino: la misma migración la devuelve con
+  `(función, false)` (limitado a la lista y a funciones que hoy son del rol
+  auxiliar), hace `CREATE OR REPLACE`, vuelve a fijar los permisos y la traspasa
+  con `(función, true)`, todo en una transacción. Cambiar la firma o el tipo de
+  retorno exige además `DROP`, que Postgres rechaza mientras las policies la
+  referencien: ahí se recrean las policies en la misma migración.
+- El metatest verifica el puente: dueño superusuario, permisos, que rechace una
+  función fuera de la lista y una de la lista que incumpla cada condición, y que
+  la acepte cuando cumple.
+
+Consecuencia sobre §4.2 ("sin membresías en ningún sentido"): se cumple
+literalmente, sin excepción. El costo es un objeto más en la base cuyo dueño es el
+superusuario, y que la migración exige haber corrido `ensure-roles.sql` (ya lo
+exigía por los roles).
+
+### Otros ajustes
+
+- **`UPDATE` y `DELETE` también llevan policy restrictiva** en las hijas de una
+  tarea (§3 nombra solo `SELECT` e `INSERT`): sin ellas, un `UPDATE` o `DELETE`
+  sin `WHERE` a una novedad de un proyecto ajeno solo tendría la policy de
+  organización. Se aplican por catálogo con `app_apply_project_policies()`
+  (toda tabla con `project_id` y `task_id`), que toda migración que cree una
+  tabla así debe correr (CLAUDE.md §6).
+- **`app_owner` no ejecuta las funciones** (§4.3 pide `EXECUTE` solo para
+  `app_user`). Una consulta de `app_owner` sobre una tabla con policies por
+  proyecto falla con `permission denied for function`; los backfills de
+  migración ya bajaban `FORCE` temporalmente.
+- **Un miembro con varios roles no es privilegiado en SQL** (`"owner,manager"`
+  se compara completo): coincide con que `parseSingleOrgRole` también se niega a
+  elegir uno.
+- **`withSystemTransaction` se renombró en dos.** La función sin organización que
+  se llamaba así pasó a `withoutTenantTransaction` (health, listar
+  organizaciones); `withSystemTransaction` es ahora la de §5, exportada solo por
+  `@orq/db/system`. La barrera de importación es un test
+  (`system-transaction-barrier.spec.ts`) y no una regla de dependency-cruiser:
+  el paquete se resuelve a `packages/db/dist`, que la configuración excluye a
+  propósito, y una regla sobre ese destino quedaría muda en silencio.
+- **El `INSERT ... RETURNING` de un proyecto reservado todavía sin miembros no
+  pasa la policy de `SELECT`**, y el creador no puede insertarse como
+  `project_member` de un proyecto que todavía no ve (la policy de
+  `project_member` exige acceso completo). Hay que resolverlo en el PR del CRUD
+  de proyectos, sin agregar funciones fuera de la lista de §3 (por ejemplo,
+  creando proyecto y membresía del creador en una sola función `SECURITY
+  DEFINER` propia, o con una policy de `INSERT` acotada al instante de creación).
+  Queda sin resolver aquí a propósito.
 
 ## Alternativas descartadas
 

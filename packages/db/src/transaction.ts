@@ -9,7 +9,7 @@ export interface TenantContext {
   requestId: string;
 }
 
-export interface SystemContext {
+export interface WithoutTenantContext {
   requestId: string;
 }
 
@@ -36,15 +36,19 @@ export async function withTenantTransaction<T>(
 }
 
 /**
- * Para trabajo sin tenant (jobs de sistema, health checks). Deliberadamente
+ * Para trabajo sin tenant (health checks, listar organizaciones). Deliberadamente
  * NO setea `app.current_org`: como toda policy de RLS compara contra
  * `current_setting('app.current_org', true)`, que devuelve NULL cuando no
- * está seteado, el predicado nunca evalúa a TRUE. Una transacción de sistema
+ * está seteado, el predicado nunca evalúa a TRUE. Una transacción sin tenant
  * es estructuralmente incapaz de leer o escribir una fila de tenant.
+ *
+ * No es el "contexto de sistema" de ADR-017 §5 (ese sí fija una organización y
+ * ve todo en ella): ver `system-transaction.ts`. Se llamaba
+ * `withSystemTransaction` hasta ADR-017; el nombre viejo engañaba.
  */
-export async function withSystemTransaction<T>(
+export async function withoutTenantTransaction<T>(
   db: Db,
-  ctx: SystemContext,
+  ctx: WithoutTenantContext,
   handler: (tx: Tx) => Promise<T>,
 ): Promise<T> {
   return db.transaction(async (tx) => {
