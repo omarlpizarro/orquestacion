@@ -29,6 +29,9 @@ describe('PATCH /projects/tasks/:id/status (integración)', () => {
   let db: Db;
   let organizationId: string;
   let ownerCookie: string;
+  // Quien lee las novedades en las aserciones: tiene que ser alguien que ve el
+  // proyecto (ADR-017); un id inventado ya no ve nada.
+  let ownerMemberId: string;
   let projectId: string;
 
   beforeAll(async () => {
@@ -51,6 +54,7 @@ describe('PATCH /projects/tasks/:id/status (integración)', () => {
     organizationId = org.organizationId;
     const tenant = await resolveTenantIdentity(auth, { cookie: ownerCookie });
     if (!tenant) throw new Error('esperaba tenant resuelto tras crear la organización');
+    ownerMemberId = tenant.memberId;
 
     await withTenantTransaction(
       db,
@@ -69,8 +73,8 @@ describe('PATCH /projects/tasks/:id/status (integración)', () => {
       { organizationId, memberId: tenant.memberId, requestId: newId() },
       (tx) =>
         tx.execute(sql`
-          insert into project (id, organization_id, site_id, created_by_member_id, code, name)
-          values (${projectId}, ${organizationId}, ${siteId}, ${tenant.memberId}, 'PRY-1', 'Frente Cambio')
+          insert into project (id, organization_id, site_id, created_by_member_id, code, name, visibility)
+          values (${projectId}, ${organizationId}, ${siteId}, ${tenant.memberId}, 'PRY-1', 'Frente Cambio', 'site')
         `),
     );
   });
@@ -115,7 +119,7 @@ describe('PATCH /projects/tasks/:id/status (integración)', () => {
   async function taskUpdatesFor(taskId: string) {
     const rows = await withTenantTransaction(
       db,
-      { organizationId, memberId: newId(), requestId: newId() },
+      { organizationId, memberId: ownerMemberId, requestId: newId() },
       (tx) =>
         tx.execute<{ kind: string; body: string | null; metadata: unknown }>(sql`
           select kind, body, metadata from task_update
@@ -257,7 +261,7 @@ describe('PATCH /projects/tasks/:id/status (integración)', () => {
 
     const afterDone = await withTenantTransaction(
       db,
-      { organizationId, memberId: newId(), requestId: newId() },
+      { organizationId, memberId: ownerMemberId, requestId: newId() },
       (tx) =>
         tx.execute<{ actual_end_at: string | null }>(
           sql`select actual_end_at from task where id = ${task.id}`,
@@ -274,7 +278,7 @@ describe('PATCH /projects/tasks/:id/status (integración)', () => {
 
     const afterReopen = await withTenantTransaction(
       db,
-      { organizationId, memberId: newId(), requestId: newId() },
+      { organizationId, memberId: ownerMemberId, requestId: newId() },
       (tx) =>
         tx.execute<{ actual_end_at: string | null }>(
           sql`select actual_end_at from task where id = ${task.id}`,

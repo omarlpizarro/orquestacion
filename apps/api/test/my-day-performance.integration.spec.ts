@@ -179,7 +179,7 @@ describe('Mi Día — seed de volumen y EXPLAIN (integración)', () => {
     await harness.stop();
   });
 
-  it('usa el índice compuesto task_org_assignee_status_planned_end_idx, no un Seq Scan, con ~25.000 tareas en la tabla', async () => {
+  it('entra por un índice que arranca en (organización, asignado), no por un Seq Scan, con ~25.000 tareas y las policies por proyecto puestas', async () => {
     const plan = await withTenantTransaction(
       db,
       { organizationId: targetOrganizationId, memberId: targetMemberId, requestId: newId() },
@@ -199,7 +199,17 @@ describe('Mi Día — seed de volumen y EXPLAIN (integración)', () => {
     );
 
     if (!plan) throw new Error('EXPLAIN no devolvió ningún plan');
-    expect(indexNamesInPlan(plan)).toContain('task_org_assignee_status_planned_end_idx');
+    // ADR-017 §10: con las policies por proyecto puestas, la consulta tiene que
+    // seguir entrando por (organización, asignado). Desde 0014 hay dos índices que
+    // empiezan así: el de Mi Día (con estado y fecha) y el del acceso "solo
+    // asignado" (con proyecto). Con este volumen al planner le da igual cuál; lo
+    // que importa es que no recorra la tabla ni que el filtro de la policy lo saque
+    // de un índice por organización y asignado.
+    const accessIndexes = [
+      'task_org_assignee_status_planned_end_idx',
+      'task_org_assignee_project_idx',
+    ];
+    expect(indexNamesInPlan(plan).some((name) => accessIndexes.includes(name))).toBe(true);
     expect(seqScansOnTaskInPlan(plan)).toHaveLength(0);
   });
 });

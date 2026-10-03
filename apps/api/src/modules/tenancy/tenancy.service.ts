@@ -97,6 +97,19 @@ export class TenancyService {
   }
 
   /**
+   * ¿Existe en la organización? Para decidir si un miembro explícito de un
+   * proyecto es asignable aunque no tenga acceso al sitio (ADR-017 §8): el
+   * hecho de figurar en `project_member` no prueba que siga siendo de la
+   * organización (no hay FK hacia `auth.member`, ADR-010).
+   */
+  async isMemberInOrganization(
+    tx: Tx,
+    params: { organizationId: string; memberId: string },
+  ): Promise<boolean> {
+    return (await findMemberForTenant(tx, params)) !== null;
+  }
+
+  /**
    * Envoltorio delgado sobre `shared/auth/ensure-default-site.ts` (ADR-013)
    * para quien lo necesite vía DI de Nest — mismo patrón que
    * `resolveTimezone`. La lógica real vive en `shared/` porque el llamador

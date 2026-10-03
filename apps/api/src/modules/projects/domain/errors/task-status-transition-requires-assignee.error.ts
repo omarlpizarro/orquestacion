@@ -19,7 +19,7 @@ export class TaskStatusTransitionRequiresAssigneeError extends DomainError {
   constructor(from: TaskStatus, to: TaskStatus) {
     super(
       'Solo la persona asignada puede cambiar el estado de esta tarea. ' +
-        'Si la tarea no tiene a nadie asignado y es de tu sitio, solo podés marcarla como bloqueada.',
+        'Si la tarea no tiene a nadie asignado y la ves por participar del proyecto, solo podés marcarla como bloqueada.',
       {
         domain_code: 'task_status_transition_requires_assignee',
         details: { from, to },

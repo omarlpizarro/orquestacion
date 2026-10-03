@@ -195,30 +195,6 @@ export async function findTaskById(
   return row ? mapTaskRow(row) : null;
 }
 
-export interface TaskWithSiteRow extends TaskRow {
-  /** Sitio del proyecto de la tarea: `task` no lo tiene, vive en `project`. */
-  siteId: string;
-}
-
-/**
- * Para el alcance por sitio: mismo `TaskRow` que `findTaskById` más el
- * `site_id` del proyecto. Join por la clave compuesta (`organization_id`,
- * `project_id`), así que nunca cruza organizaciones aunque RLS fallara.
- */
-export async function findTaskWithSiteById(
-  tx: Tx,
-  params: { organizationId: string; taskId: string },
-): Promise<TaskWithSiteRow | null> {
-  const result = await tx.execute<TaskRowSql & { site_id: string }>(sql`
-    select t.*, nlevel(t.path) as depth, p.site_id
-    from task t
-    join project p on p.id = t.project_id and p.organization_id = t.organization_id
-    where t.id = ${params.taskId} and t.organization_id = ${params.organizationId}
-  `);
-  const row = result.rows[0];
-  return row ? { ...mapTaskRow(row), siteId: row.site_id } : null;
-}
-
 export interface FindMyDayTaskRowsParams {
   organizationId: string;
   assigneeMemberId: string;
