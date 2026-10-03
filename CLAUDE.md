@@ -466,6 +466,9 @@ mock no ejecuta.
 - Funciones cortas, nombres explícitos, sin abreviaturas crípticas.
 - Sin comentarios que repitan el código. Comentás el porqué, no el qué.
 - Commits en formato convencional: `feat(scheduling): ...`, `fix(api): ...`.
+- **Toda interfaz (web y móvil) sigue `docs/design-guidelines.md`; ningún
+  componente lleva colores, tamaños ni espaciados escritos a mano, solo
+  tokens** (`packages/ui-tokens`, que nace con el primer PR de interfaz).
 
 ---
 
