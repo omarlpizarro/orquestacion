@@ -157,6 +157,24 @@ describe('POST /projects/tasks (integración)', () => {
     expect(await countTasksWithTitle('Idempotente')).toBe(1);
   });
 
+  it('dos pedidos simultáneos con el mismo client_mutation_id producen un solo efecto y la misma respuesta', async () => {
+    const payload = {
+      client_mutation_id: newId(),
+      id: newId(),
+      project_id: projectId,
+      title: 'Idempotente concurrente',
+    };
+
+    const [first, second] = await Promise.all([post(payload), post(payload)]);
+
+    // Sin seguir `cause`, el que perdía la carrera de la PK de `mutation_log`
+    // recibía un 500: `hasPostgresErrorCode` nunca veía el SQLSTATE.
+    expect(first.statusCode, first.body).toBe(200);
+    expect(second.statusCode, second.body).toBe(200);
+    expect(second.json().id).toBe(first.json().id);
+    expect(await countTasksWithTitle('Idempotente concurrente')).toBe(1);
+  });
+
   it('responde NOT_FOUND si el proyecto no existe', async () => {
     const response = await post({
       client_mutation_id: newId(),
