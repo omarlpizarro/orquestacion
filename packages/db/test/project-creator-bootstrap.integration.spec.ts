@@ -186,13 +186,20 @@ describe('el creador entra como miembro (ADR-017, adenda)', () => {
       `);
     });
     // El asignado ve el proyecto (nivel "solo asignado") y la policy le deja
-    // hacer UPDATE; el trigger de version cierra el atajo.
+    // hacer UPDATE. El atacante intenta fijar también version = 1; el trigger
+    // app_bump_version lo pisa con OLD.version + 1. Se verifica que el UPDATE
+    // sí se aplicó (una fila) y que version quedó en 2, para que el 42501 del
+    // INSERT del miembro sea atribuible al trigger y no a otra cosa.
     await expectRlsViolation(
       as(assigned, async (tx) => {
-        await tx.execute(sql`
-          update project set created_by_member_id = ${assigned}, created_at = now()
+        const updated = await tx.execute<{ version: number }>(sql`
+          update project
+             set created_by_member_id = ${assigned}, created_at = now(), version = 1
            where id = ${projectId}
+          returning version
         `);
+        expect(updated.rowCount).toBe(1);
+        expect(updated.rows[0]?.version).toBe(2);
         await insertProjectMember(tx, projectId, assigned, assigned);
       }),
     );
