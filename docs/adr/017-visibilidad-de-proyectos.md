@@ -434,6 +434,114 @@ viejo lee la tabla falsa y devuelve que el proyecto reservado es accesible
   `project_member` explícito, como dice §2, y la solución tiene que producir esa
   fila, no saltearla. Queda sin resolver aquí a propósito.
 
+## Adenda: el creador entra como miembro (2026-10-11)
+
+Resuelve lo que "Otros ajustes" dejó abierto para el CRUD de proyectos. La
+decisión es de Omar. Migración `0016_project_creator_bootstrap`.
+
+### El problema
+
+Dos policies se cruzan en la creación de un proyecto reservado:
+
+- El `INSERT` de `project` no tiene policy restrictiva y pasa, pero el creador
+  todavía no es miembro y no lo ve.
+- El `INSERT` de su fila de `project_member` exige acceso completo al proyecto
+  (`project_member_project_access_insert`), que justamente le daría esa fila.
+
+### La restricción de diseño y cómo se cumple
+
+> El acceso del creador no puede ser implícito por `project.created_by_member_id`.
+> §8 dice que `owner` y `director` pueden quitar al creador y que entonces pierde
+> el acceso; un acceso derivado de esa columna no se podría quitar sin reescribir
+> el proyecto.
+
+La solución agrega una rama a `app_full_access_project_ids()` que da acceso
+completo al creador **solo durante la transacción que creó el proyecto**:
+
+```sql
+p.created_by_member_id = <app.current_member>
+AND p.created_at = transaction_timestamp()
+AND p.version = 1
+```
+
+Cumple la restricción porque el acceso derivado **no persiste**: termina con el
+`COMMIT` de esa transacción, y lo único que queda es la fila de `project_member`
+que el handler inserta adentro. Desde la transacción siguiente, el acceso del
+creador es el de cualquier otro miembro explícito: lo quita un `UPDATE` de
+`deleted_at` sobre su fila, sin reescribir el proyecto, y entonces recibe 404. No
+hay forma de que `created_by_member_id` le devuelva el acceso después.
+
+### Qué hace seguras las tres condiciones
+
+- **`created_at = transaction_timestamp()`**: `now()` (el `DEFAULT` de la columna)
+  vale lo mismo durante toda la transacción, savepoints incluidos, y es distinto
+  en la siguiente. No se usa `xmin`, que cambia dentro de un savepoint.
+- **`version = 1`**: `app_bump_version` sube `version` en cada `UPDATE`. Quien
+  tiene acceso "solo asignado" puede hacer `UPDATE` de la fila (policy de
+  `project`); sin esta condición podría reescribirse `created_by_member_id` y
+  `created_at` para darse acceso completo. Con ella, ese `UPDATE` deja `version >= 2`.
+- **Filtro de organización**: la función sigue filtrando por `app.current_org`.
+
+### Contrato para el código de aplicación
+
+La rama depende de que `created_at` venga del `DEFAULT now()` de la base.
+**Ningún código de aplicación manda `created_at` ni `version` al insertar un
+proyecto**, tampoco cuando llegue el offline (el móvil escribe por la API, que
+crea el proyecto con la fecha de la base). Un cliente que mandara `created_at`
+podría fabricar la coincidencia con el instante de otra transacción; el efecto
+quedaría limitado a proyectos que creó él mismo, pero el contrato lo prohíbe igual.
+
+Orden obligatorio del handler `create-project`, dentro de una sola transacción:
+
+1. `INSERT` de `project` (**sin `RETURNING`**: la función es `STABLE` y no ve la
+   fila de la sentencia que la está insertando, así que la policy de `SELECT`
+   rechaza el `RETURNING`; verificado en `project-creator-bootstrap`).
+2. Enseguida, `INSERT` de `project_member` del creador (también si es `owner` o
+   `director`, §2).
+3. Recién después, cualquier otra cosa (tareas iniciales, miembros adicionales,
+   `mutation_log`).
+
+Un `UPDATE` del proyecto antes del paso 2 sube `version` a 2 y corta el acceso
+transitorio: el `INSERT` del miembro falla con `42501`. Es una falla ruidosa y
+temprana, no una fuga.
+
+### Cómo se aplica el cambio
+
+Es un cambio de cuerpo, no de firma. La función ya es de `app_rls_helper`, así
+que la migración usa el camino de "Corregir el cuerpo de una función ya
+traspasada": la devuelve con el puente (`false`), la reemplaza, vuelve a fijar
+`REVOKE`/`GRANT` y la traspasa de nuevo (`true`), en una transacción. No cambia
+la lista fija del puente ni `ensure-roles.sql`, y el rol auxiliar sigue siendo de
+solo lectura (§4.1: la función devuelve `setof uuid`).
+
+### Alternativa descartada: una función `SECURITY DEFINER` que escribe
+
+Una función propia que creara el proyecto y la membresía del creador, con
+`BYPASSRLS`. Se descartó porque:
+
+- Sería la primera función del rol auxiliar que **escribe**; hoy las seis solo
+  leen y devuelven booleanos o ids (§4.1), y esa propiedad es parte de por qué se
+  aprobó el rol.
+- Exige sumar una firma a la lista del puente, o sea modificar `ensure-roles.sql`
+  y que una persona con acceso de superusuario lo vuelva a correr.
+- Un `INSERT` con `BYPASSRLS` saltea todas las policies de `project` y
+  `project_member`, no solo la que molesta, y habría que reimplementar en la
+  función las validaciones del handler.
+
+Tampoco se adoptó crear el proyecto como `site` y pasarlo a `reserved` dentro de
+la misma transacción: deja en `audit_log` una visibilidad que el proyecto nunca
+tuvo de verdad, y se rompe cuando exista `allow_site_visibility = false` (§11).
+
+### Verificación
+
+`packages/db/test/project-creator-bootstrap.integration.spec.ts`: el creador
+crea y se agrega; el acceso no sobrevive al `COMMIT` sin la fila; quitarlo con
+`deleted_at` le saca el acceso; otro miembro y el creador de un proyecto previo no
+pueden agregarse; un `UPDATE` previo corta el acceso; un asignado que reescribe
+`created_by_member_id` y `created_at` no gana acceso; funciona dentro de un
+savepoint; y un reintento del mismo `client_mutation_id` (secuencial y
+concurrente) deja un solo proyecto y una sola fila de miembro.
+
 ## Alternativas descartadas
 
 - **Policies que se leen entre tablas, sin funciones auxiliares.** Recursión
