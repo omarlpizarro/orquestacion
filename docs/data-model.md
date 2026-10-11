@@ -1011,21 +1011,22 @@ slices siguientes contra una conexión que en los hechos ignora las policies.
 | `0013` | `validate_project_visibility_structure` | `VALIDATE CONSTRAINT` de `project_visibility_check`, de la FK compuesta y del `CHECK` de `task_update.project_id`, `SET NOT NULL` y `DROP` del `CHECK` temporal. Despliegue posterior a `0012`, **nunca en la misma corrida del migrador** (CLAUDE.md §6). Se escribe a mano: `drizzle-kit generate` no ve diferencia porque el esquema ya declara el estado final | Hecha |
 | `0014` | `task_assignee_project_index` | `(organization_id, assignee_member_id, project_id)` parcial `WHERE deleted_at IS NULL`: el acceso "solo asignado" de ADR-017 se deriva de `task` | Hecha |
 | `0015` | `project_visibility_behavior` | ADR-017, PR de comportamiento: las seis funciones auxiliares de RLS (traspasadas a `app_rls_helper` por el puente de `ensure-roles.sql`), `SELECT` del rol auxiliar, policies `RESTRICTIVE` por comando sobre `task`, `project`, `project_member`, `audit_log` y sus particiones y las hijas de una tarea (`app_apply_project_policies()`). Exige haber corrido `ensure-roles.sql` antes (falla con un mensaje claro si no) | Hecha |
-| `0016` | `templates` | `sop_template`, `sop_template_task` | Pendiente |
-| `0017` | `custom_fields` | `custom_field_definition`, índices GIN | Pendiente |
-| `0018` | `resources` | `resource`, `resource_booking` con la exclusion constraint | Pendiente |
-| `0019` | `dependencies` | `task_dependency`, función anti-ciclos, `schedule_change` | Pendiente |
-| `0020` | `collaboration` (resto) | `attachment`, `task_acknowledgement` | Pendiente |
-| `0021` | `audit` | Resto del audit trail del paso 8: triggers de `task` y demás, job de particiones y retención. `audit_log` y `audit_trigger()` ya existen desde `0012` | Pendiente |
-| `0022` | `notifications` | `notification`, `notification_preference`, `escalation_policy` | Pendiente |
-| `0023` | `sync` | Publicación lógica, `wal_level` (ya no `mutation_log`, adelantada a `0004`) | Pendiente |
-| `0024` | `billing` | `plan`, `subscription`, `payment_event`, `usage_counter` | Pendiente |
-| `0025` | `analytics` | `project_kpi` materializada y su job de refresco | Pendiente |
-| `0026` | `seed` | Planes, plantillas SOP por industria, catálogos iniciales | Pendiente |
+| `0016` | `project_creator_bootstrap` | ADR-017, adenda: `app_full_access_project_ids()` da acceso completo al creador solo durante la transacción que creó el proyecto (`created_by_member_id`, `created_at = transaction_timestamp()`, `version = 1`), para que inserte su fila de `project_member`. Cambio de cuerpo con el puente (`false` / `CREATE OR REPLACE` / `true`); no cambia la lista del puente | Hecha |
+| `0017` | `templates` | `sop_template`, `sop_template_task` | Pendiente |
+| `0018` | `custom_fields` | `custom_field_definition`, índices GIN | Pendiente |
+| `0019` | `resources` | `resource`, `resource_booking` con la exclusion constraint | Pendiente |
+| `0020` | `dependencies` | `task_dependency`, función anti-ciclos, `schedule_change` | Pendiente |
+| `0021` | `collaboration` (resto) | `attachment`, `task_acknowledgement` | Pendiente |
+| `0022` | `audit` | Resto del audit trail del paso 8: triggers de `task` y demás, job de particiones y retención. `audit_log` y `audit_trigger()` ya existen desde `0012` | Pendiente |
+| `0023` | `notifications` | `notification`, `notification_preference`, `escalation_policy` | Pendiente |
+| `0024` | `sync` | Publicación lógica, `wal_level` (ya no `mutation_log`, adelantada a `0004`) | Pendiente |
+| `0025` | `billing` | `plan`, `subscription`, `payment_event`, `usage_counter` | Pendiente |
+| `0026` | `analytics` | `project_kpi` materializada y su job de refresco | Pendiente |
+| `0027` | `seed` | Planes, plantillas SOP por industria, catálogos iniciales | Pendiente |
 
-`0009`/`0010` (site_id obligatorio, ADR-013) no estaban en el plan original — se adelantan por la misma razón que `mutation_log` y `task_update`: el alcance por sitio, que sigue en fase 2, necesita la columna cerrada primero. Corrieron ellas dos en el lugar de `templates`/`custom_fields`, que se corren un lugar cada una.
+`0009`/`0010` (site_id obligatorio, ADR-013) no estaban en el plan original — se adelantan por la misma razón que `mutation_log` y `task_update`: el alcance por sitio, que sigue en fase 2, necesita la columna cerrada primero. Corrieron ellas dos en el lugar de `templates`/`custom_fields`, que se corren un lugar cada una. `0016` (adenda del ADR-017) corre una más.
 
-`0000` a `0018` son la v1. `0019` a `0024` acompañan las fases posteriores, pero conviene escribirlas al mismo tiempo para que el esquema quede coherente de entrada.
+`0000` a `0019` son la v1. `0020` a `0025` acompañan las fases posteriores, pero conviene escribirlas al mismo tiempo para que el esquema quede coherente de entrada.
 
 Regla de operación: ninguna migración hace `DROP COLUMN` en el mismo despliegue que deja de usarla. Primero se deja de escribir, se despliega, se verifica, y recién en un despliegue posterior se borra. Con clientes en el campo que corren versiones viejas de la app móvil, esa disciplina es lo que evita cortes. La única excepción hecha hasta ahora es `0011` (ADR-015): una columna que ningún código leyó ni escribió nunca, en una tabla vacía; no sienta precedente para una columna que el código sí usa.
 
