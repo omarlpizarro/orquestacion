@@ -17,6 +17,7 @@ export const statement = {
   member: ['create', 'update', 'delete'],
   invitation: ['create', 'cancel'],
   task: ['create'],
+  project: ['create', 'change_visibility', 'manage_members'],
   site: ['grant_access'],
 } as const;
 
@@ -27,6 +28,7 @@ export const ownerRole = accessControl.newRole({
   member: ['create', 'update', 'delete'],
   invitation: ['create', 'cancel'],
   task: ['create'],
+  project: ['create', 'change_visibility', 'manage_members'],
   site: ['grant_access'],
 });
 
@@ -35,10 +37,17 @@ export const directorRole = accessControl.newRole({
   member: ['create', 'update', 'delete'],
   invitation: ['create', 'cancel'],
   task: ['create'],
+  project: ['create', 'change_visibility', 'manage_members'],
   site: ['grant_access'],
 });
 
-/** Alcance por sitio (`member_site_access`) se resuelve aparte, en dominio. */
+/**
+ * Alcance por sitio (`member_site_access`) se resuelve aparte, en dominio. Sin
+ * `project:*` (RF-C1: la creación de proyectos es del nivel 1): un manager no
+ * crea proyectos. Sí puede cambiar la visibilidad o manejar los miembros de uno
+ * que creó, pero eso no es una capacidad de rol sino un dato del proyecto
+ * (`created_by_member_id`) que evalúa el handler (ADR-017 §8).
+ */
 export const managerRole = accessControl.newRole({
   member: ['create', 'update'],
   invitation: ['create'],

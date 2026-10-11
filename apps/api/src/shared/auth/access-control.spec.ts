@@ -30,3 +30,21 @@ describe('hasCapability: site:grant_access', () => {
     expect(hasCapability('operator', { site: ['grant_access'] })).toBe(false);
   });
 });
+
+describe('hasCapability: project', () => {
+  it('solo owner y director crean proyectos (RF-C1); manager y operator no', () => {
+    expect(hasCapability('owner', { project: ['create'] })).toBe(true);
+    expect(hasCapability('director', { project: ['create'] })).toBe(true);
+    expect(hasCapability('manager', { project: ['create'] })).toBe(false);
+    expect(hasCapability('operator', { project: ['create'] })).toBe(false);
+  });
+
+  it('cambiar la visibilidad y manejar miembros por rol es solo de owner y director', () => {
+    for (const capability of ['change_visibility', 'manage_members'] as const) {
+      expect(hasCapability('owner', { project: [capability] })).toBe(true);
+      expect(hasCapability('director', { project: [capability] })).toBe(true);
+      expect(hasCapability('manager', { project: [capability] })).toBe(false);
+      expect(hasCapability('operator', { project: [capability] })).toBe(false);
+    }
+  });
+});

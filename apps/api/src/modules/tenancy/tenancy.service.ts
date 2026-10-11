@@ -11,7 +11,9 @@ import {
   parseSingleOrgRole,
 } from '../../shared/auth/org-role.js';
 import {
+  findActiveSiteIds,
   findMemberForTenant,
+  findSiteForTenant,
   hasMemberSiteAccessRow,
 } from './infrastructure/site-access.repository.js';
 
@@ -26,6 +28,11 @@ export interface CanAccessSiteParams {
   role: OrgRole;
   siteId: string;
 }
+
+export type SoleSiteResolution =
+  | { kind: 'single'; siteId: string }
+  | { kind: 'multiple' }
+  | { kind: 'none' };
 
 export interface IsMemberAssignableParams {
   organizationId: string;
@@ -107,6 +114,33 @@ export class TenancyService {
     params: { organizationId: string; memberId: string },
   ): Promise<boolean> {
     return (await findMemberForTenant(tx, params)) !== null;
+  }
+
+  /** ¿Existe este sitio en la organización? Para validar un `site_id` que llega en un pedido. */
+  async siteExists(tx: Tx, params: { organizationId: string; siteId: string }): Promise<boolean> {
+    return (await findSiteForTenant(tx, params)) !== null;
+  }
+
+  /**
+   * El sitio por defecto de una organización con un solo sitio activo (los
+   * formularios no preguntan lo que el sistema ya sabe). Si no tiene ninguno
+   * —el hook `afterCreateOrganization` pudo fallar después de que Better Auth
+   * confirmó la organización, ADR-013— lo repara con `ensureDefaultSite`, que
+   * es idempotente, en vez de dejar al usuario trabado. Con más de uno no
+   * elige: lo tiene que decidir quien llama.
+   */
+  async resolveSoleSite(tx: Tx, params: { organizationId: string }): Promise<SoleSiteResolution> {
+    let siteIds = await findActiveSiteIds(tx, params);
+    if (siteIds.length === 0) {
+      await ensureDefaultSite(tx, params);
+      siteIds = await findActiveSiteIds(tx, params);
+    }
+    const [only, other] = siteIds;
+    if (only && !other) return { kind: 'single', siteId: only };
+    if (only && other) return { kind: 'multiple' };
+    // `ensureDefaultSite` no crea nada si la organización ya tiene un sitio,
+    // aunque esté desactivado: ahí no hay ninguno activo que usar por defecto.
+    return { kind: 'none' };
   }
 
   /**

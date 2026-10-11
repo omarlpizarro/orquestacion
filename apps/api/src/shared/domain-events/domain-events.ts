@@ -13,6 +13,11 @@ import { EventEmitter } from 'node:events';
  * nunca pasó.
  */
 export interface DomainEventMap {
+  'project.created': {
+    projectId: string;
+    organizationId: string;
+    requestId: string;
+  };
   'task.created': {
     taskId: string;
     organizationId: string;

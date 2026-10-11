@@ -38,3 +38,20 @@ function findPostgresError(error: unknown): { code: string; constraint?: unknown
   }
   return undefined;
 }
+
+/**
+ * Para una mutación idempotente (ADR-007): si dos pedidos con el mismo
+ * `client_mutation_id` corren a la vez, ninguno ve la mutación del otro y la
+ * clave de `mutation_log` (o la de la fila que crean) deja pasar a uno. El que
+ * pierde reintenta una vez: ahora la mutación del ganador ya está confirmada y
+ * el `findPriorMutation` del intento la encuentra. Si el segundo intento falla
+ * por lo que sea, se propaga: no era una carrera.
+ */
+export async function retryOnceOnUniqueViolation<T>(attempt: () => Promise<T>): Promise<T> {
+  try {
+    return await attempt();
+  } catch (error) {
+    if (!hasPostgresErrorCode(error, UNIQUE_VIOLATION)) throw error;
+  }
+  return attempt();
+}
