@@ -7,7 +7,8 @@ import { type Tx, withTenantTransaction } from '../src/transaction.js';
 
 /**
  * `task_update_body_required_check` (0017, agregada `NOT VALID`): comentario,
- * reporte de bloqueo y reapertura exigen `body`. Rige para toda fila nueva
+ * reporte de bloqueo y reapertura exigen `body` con al menos un carácter que no
+ * sea espacio en blanco (`body ~ '[^[:space:]]'`). Rige para toda fila nueva
  * aunque todavía no se haya validado el historial.
  */
 describe('task_update exige texto real para comment, block_report y reopen', () => {
@@ -57,30 +58,27 @@ describe('task_update exige texto real para comment, block_report y reopen', () 
     await harness.stop();
   });
 
-  const withoutText: Array<[string, string | null]> = [
-    ['sin body', null],
-    ["con body ''", ''],
-    ["con body ' ' (solo espacios)", ' '],
-    ["con body '     ' (solo espacios)", '     '],
-  ];
+  // `%j` imprime el valor como JSON, así que los tabuladores y saltos de línea se ven escapados.
+  const withoutText: Array<string | null> = [null, '', ' ', '     ', '\t', '\n', '\r\n', ' \t\n '];
   const kindsThatNeedText = ['comment', 'block_report', 'reopen'];
 
   describe.each(kindsThatNeedText)('%s', (kind) => {
-    it.each(withoutText)('se rechaza %s (23514)', async (_label, body) => {
+    it.each(withoutText)('se rechaza body %j (23514)', async (body) => {
       await expect(inTenant((tx) => insertUpdate(tx, kind, body))).rejects.toMatchObject({
         cause: { code: '23514', constraint: 'task_update_body_required_check' },
       });
     });
 
-    it('se acepta con texto, también si lleva espacios alrededor', async () => {
-      await expect(
-        inTenant((tx) => insertUpdate(tx, kind, '  Falta el permiso  ')),
-      ).resolves.toBeDefined();
-    });
+    it.each(['  Falta el permiso  ', '\t\nFalta el permiso\r\n', '?'])(
+      'se acepta con texto %j',
+      async (body) => {
+        await expect(inTenant((tx) => insertUpdate(tx, kind, body))).resolves.toBeDefined();
+      },
+    );
   });
 
   describe.each(['status_change', 'evidence', 'system'])('%s: no exige texto', (kind) => {
-    it.each([null, '', ' '])('puede ir con body %j', async (body) => {
+    it.each([null, '', ' ', '\t\n'])('puede ir con body %j', async (body) => {
       await expect(inTenant((tx) => insertUpdate(tx, kind, body))).resolves.toBeDefined();
     });
   });

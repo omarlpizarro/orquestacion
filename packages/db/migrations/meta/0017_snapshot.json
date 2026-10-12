@@ -811,7 +811,7 @@
         },
         "task_update_body_required_check": {
           "name": "task_update_body_required_check",
-          "value": "\"task_update\".\"kind\" not in ('comment','block_report','reopen') or (\"task_update\".\"body\" is not null and btrim(\"task_update\".\"body\") <> '')"
+          "value": "\"task_update\".\"kind\" not in ('comment','block_report','reopen') or (\"task_update\".\"body\" is not null and \"task_update\".\"body\" ~ '[^[:space:]]')"
         }
       },
       "isRLSEnabled": false
