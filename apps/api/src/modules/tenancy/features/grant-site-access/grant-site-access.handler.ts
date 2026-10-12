@@ -3,11 +3,7 @@ import type { GrantSiteAccessOutput } from '@orq/contracts';
 import type { Tx } from '@orq/db';
 import { hasCapability } from '../../../../shared/auth/access-control.js';
 import { insertMemberSiteAccess } from '../../../../shared/auth/member-site-access.js';
-import { findPriorMutation, recordMutation } from '../../../../shared/database/mutation-log.js';
-import {
-  hasPostgresErrorCode,
-  UNIQUE_VIOLATION,
-} from '../../../../shared/database/postgres-errors.js';
+import { claimMutation } from '../../../../shared/database/mutation-log.js';
 import { TransactionService } from '../../../../shared/database/transaction.service.js';
 import type { TenantIdentity } from '../../../../shared/request-context/request-context.js';
 import { getRequestContext } from '../../../../shared/request-context/request-context.js';
@@ -33,36 +29,11 @@ export class GrantSiteAccessHandler {
       throw new SiteAccessGrantForbiddenError();
     }
 
-    await this.applyOrReplayMutation(command, tenant);
+    await this.transactions.withTenant((tx) => this.applyMutation(command, tenant, tx));
 
     // La respuesta se arma del pedido, no de una fila: la tabla no tiene id
     // propio, y un reintento tiene que devolver exactamente lo mismo.
     return { site_id: command.site_id, member_id: command.member_id };
-  }
-
-  /**
-   * Mismo criterio que `create-task`: si dos pedidos con el mismo
-   * `client_mutation_id` corren a la vez, ninguno ve la mutación del otro y
-   * los dos intentan registrarla; la PK de `mutation_log` deja pasar a uno. El
-   * que pierde no debe recibir un 500 sino el mismo resultado que el que
-   * ganó.
-   */
-  private async applyOrReplayMutation(
-    command: GrantSiteAccessCommand,
-    tenant: TenantIdentity,
-  ): Promise<void> {
-    try {
-      await this.transactions.withTenant((tx) => this.applyMutation(command, tenant, tx));
-    } catch (error) {
-      if (!hasPostgresErrorCode(error, UNIQUE_VIOLATION)) throw error;
-
-      const prior = await this.transactions.withTenant((tx) =>
-        findPriorMutation(tx, command.client_mutation_id),
-      );
-      // Sin mutación previa resuelta, la violación era por otra cosa: no se
-      // disfraza.
-      if (prior?.result !== 'applied') throw error;
-    }
   }
 
   private async applyMutation(
@@ -70,8 +41,16 @@ export class GrantSiteAccessHandler {
     tenant: TenantIdentity,
     tx: Tx,
   ): Promise<void> {
-    const prior = await findPriorMutation(tx, command.client_mutation_id);
-    if (prior?.result === 'applied') return;
+    // Primera sentencia de la transacción (ADR-007): dos pedidos simultáneos con
+    // el mismo `client_mutation_id` se serializan acá, y el segundo no repite nada.
+    const claim = await claimMutation(tx, {
+      clientMutationId: command.client_mutation_id,
+      organizationId: tenant.organizationId,
+      memberId: tenant.memberId,
+      kind: 'site-access.grant',
+      entityId: command.site_id,
+    });
+    if (!claim.claimed) return;
 
     const site = await findSiteForTenant(tx, {
       organizationId: tenant.organizationId,
@@ -93,15 +72,6 @@ export class GrantSiteAccessHandler {
       organizationId: tenant.organizationId,
       memberId: command.member_id,
       siteId: command.site_id,
-    });
-
-    await recordMutation(tx, {
-      clientMutationId: command.client_mutation_id,
-      organizationId: tenant.organizationId,
-      memberId: tenant.memberId,
-      kind: 'site-access.grant',
-      entityId: command.site_id,
-      result: 'applied',
     });
   }
 }

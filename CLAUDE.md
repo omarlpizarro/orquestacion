@@ -421,7 +421,10 @@ que roles y RLS se adelantaron a fase 1 — es cara de retrofitear (ver
 ADR-007). Toda mutación:
 
 - Acepta un `client_mutation_id` (UUIDv7) y lo registra en `mutation_log`. Un
-  reintento devuelve el resultado anterior en vez de duplicar.
+  reintento devuelve el resultado anterior en vez de duplicar. La mutación se
+  reserva con `claimMutation` como **primera sentencia** de la transacción,
+  antes de leer nada (ADR-007): así dos pedidos simultáneos con el mismo id
+  también devuelven lo mismo.
 - Devuelve un motivo de rechazo legible cuando no se puede aplicar. Si el usuario
   no se entera de que su cambio se descartó, el offline está roto aunque la
   sincronización funcione.

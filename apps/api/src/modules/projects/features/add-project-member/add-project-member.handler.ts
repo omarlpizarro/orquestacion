@@ -2,8 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { type AddProjectMemberOutput, newId } from '@orq/contracts';
 import type { Tx } from '@orq/db';
 import { hasCapability } from '../../../../shared/auth/access-control.js';
-import { findPriorMutation, recordMutation } from '../../../../shared/database/mutation-log.js';
-import { retryOnceOnUniqueViolation } from '../../../../shared/database/postgres-errors.js';
+import { claimMutation } from '../../../../shared/database/mutation-log.js';
 import { TransactionService } from '../../../../shared/database/transaction.service.js';
 import {
   getRequestContext,
@@ -14,11 +13,7 @@ import { ProjectMemberNotInOrganizationError } from '../../domain/errors/project
 import { ProjectMembersManageForbiddenError } from '../../domain/errors/project-members-manage-forbidden.error.js';
 import { ProjectNotFoundError } from '../../domain/errors/project-not-found.error.js';
 import { canManageProject } from '../../domain/project-permissions.js';
-import {
-  findProjectById,
-  insertProjectMember,
-  isActiveProjectMember,
-} from '../../infrastructure/project.repository.js';
+import { findProjectById, insertProjectMember } from '../../infrastructure/project.repository.js';
 import type { AddProjectMemberCommand } from './add-project-member.command.js';
 
 @Injectable()
@@ -34,9 +29,7 @@ export class AddProjectMemberHandler {
       throw new Error('add-project-member requiere una sesión con organización activa.');
     }
 
-    await retryOnceOnUniqueViolation(() =>
-      this.transactions.withTenant((tx) => this.applyMutation(command, tenant, tx)),
-    );
+    await this.transactions.withTenant((tx) => this.applyMutation(command, tenant, tx));
 
     // La respuesta se arma del pedido, no de una fila: un reintento tiene que
     // devolver exactamente lo mismo.
@@ -50,8 +43,16 @@ export class AddProjectMemberHandler {
   ): Promise<void> {
     const { organizationId, memberId } = tenant;
 
-    const prior = await findPriorMutation(tx, command.client_mutation_id);
-    if (prior?.result === 'applied') return;
+    // Primera sentencia de la transacción (ADR-007): dos pedidos simultáneos con
+    // el mismo `client_mutation_id` se serializan acá, y el segundo no repite nada.
+    const claim = await claimMutation(tx, {
+      clientMutationId: command.client_mutation_id,
+      organizationId,
+      memberId,
+      kind: 'project.add_member',
+      entityId: command.project_id,
+    });
+    if (!claim.claimed) return;
 
     // 404 → 403 (ADR-017 §6).
     const project = await findProjectById(tx, { organizationId, projectId: command.project_id });
@@ -71,31 +72,16 @@ export class AddProjectMemberHandler {
     });
     if (!inOrganization) throw new ProjectMemberNotInOrganizationError();
 
-    // Agregar a quien ya es miembro no es un error. Si dos pedidos distintos lo
-    // agregan a la vez, el índice único parcial deja pasar a uno y el otro
-    // reintenta (arriba) y lo encuentra.
-    const alreadyMember = await isActiveProjectMember(tx, {
+    // Agregar a quien ya es miembro no es un error. Dos pedidos DISTINTOS (con
+    // otro `client_mutation_id`) que lo agregan a la vez no chocan: el
+    // `INSERT ... ON CONFLICT DO NOTHING` sobre el índice único parcial deja pasar
+    // a uno y el otro no hace nada.
+    await insertProjectMember(tx, {
+      id: newId(),
       organizationId,
+      createdByMemberId: memberId,
       projectId: command.project_id,
       memberId: command.member_id,
-    });
-    if (!alreadyMember) {
-      await insertProjectMember(tx, {
-        id: newId(),
-        organizationId,
-        createdByMemberId: memberId,
-        projectId: command.project_id,
-        memberId: command.member_id,
-      });
-    }
-
-    await recordMutation(tx, {
-      clientMutationId: command.client_mutation_id,
-      organizationId,
-      memberId,
-      kind: 'project.add_member',
-      entityId: command.project_id,
-      result: 'applied',
     });
   }
 }

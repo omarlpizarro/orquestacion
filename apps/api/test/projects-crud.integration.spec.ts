@@ -205,7 +205,7 @@ describe('CRUD de proyectos (integración)', () => {
 
       expect(first.statusCode, first.body).toBe(200);
       expect(second.statusCode, second.body).toBe(200);
-      expect(second.json().id).toBe(first.json().id);
+      expect(second.json()).toEqual(first.json());
       expect(await countRows('project', 'id', payload.id)).toBe(1);
       expect(await countRows('project_member', 'project_id', payload.id)).toBe(1);
     });
@@ -367,6 +367,25 @@ describe('CRUD de proyectos (integración)', () => {
       expect(seen.statusCode, seen.body).toBe(404);
     });
 
+    it('dos pedidos simultáneos con el mismo client_mutation_id: los dos responden lo mismo y la versión sube una sola vez', async () => {
+      const project = await createOk(owner.cookie);
+      const payload = {
+        client_mutation_id: newId(),
+        visibility: 'site',
+        expected_version: project.version,
+      };
+
+      const [first, second] = await Promise.all([
+        call(owner.cookie, 'PATCH', `/projects/${project.id}/visibility`, payload),
+        call(owner.cookie, 'PATCH', `/projects/${project.id}/visibility`, payload),
+      ]);
+
+      expect(first.statusCode, first.body).toBe(200);
+      expect(second.statusCode, second.body).toBe(200);
+      expect(second.json()).toEqual(first.json());
+      expect(first.json()).toMatchObject({ visibility: 'site', version: project.version + 1 });
+    });
+
     it('una versión vieja se rechaza con 409', async () => {
       const project = await createOk(owner.cookie);
       await changeVisibility(owner.cookie, project.id, 'site', project.version);
@@ -467,6 +486,20 @@ describe('CRUD de proyectos (integración)', () => {
 
       expect(first.statusCode, first.body).toBe(200);
       expect(second.statusCode, second.body).toBe(200);
+      expect(second.json()).toEqual(first.json());
+      expect(await countRows('project_member', 'project_id', project.id)).toBe(2);
+    });
+
+    it('dos pedidos DISTINTOS que agregan al mismo miembro a la vez: los dos andan y hay una sola fila', async () => {
+      const project = await createOk(owner.cookie);
+
+      const [first, second] = await Promise.all([
+        addMember(owner.cookie, project.id, operator.memberId),
+        addMember(owner.cookie, project.id, operator.memberId),
+      ]);
+
+      expect(first.statusCode, first.body).toBe(200);
+      expect(second.statusCode, second.body).toBe(200);
       expect(await countRows('project_member', 'project_id', project.id)).toBe(2);
     });
 
@@ -556,6 +589,29 @@ describe('CRUD de proyectos (integración)', () => {
       expect(first.statusCode, first.body).toBe(200);
       expect(second.statusCode, second.body).toBe(200);
       expect(second.json()).toEqual(first.json());
+    });
+
+    it('dos bajas simultáneas con el mismo client_mutation_id: las dos responden lo mismo y se quita una sola vez', async () => {
+      const project = await createOk(owner.cookie);
+      await addMember(owner.cookie, project.id, operator.memberId);
+      const mutationId = newId();
+
+      const [first, second] = await Promise.all([
+        removeMember(owner.cookie, project.id, operator.memberId, mutationId),
+        removeMember(owner.cookie, project.id, operator.memberId, mutationId),
+      ]);
+
+      expect(first.statusCode, first.body).toBe(200);
+      expect(second.statusCode, second.body).toBe(200);
+      expect(second.json()).toEqual(first.json());
+      const rows = await asOwner((tx) =>
+        tx.execute<{ deleted_at: string | null }>(sql`
+          select deleted_at from project_member
+           where project_id = ${project.id} and member_id = ${operator.memberId}
+        `),
+      );
+      expect(rows.rows).toHaveLength(1);
+      expect(rows.rows[0]?.deleted_at).not.toBeNull();
     });
 
     it('quitar a alguien que no es miembro explícito responde 404 project_member_not_found', async () => {

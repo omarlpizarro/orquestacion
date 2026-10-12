@@ -2,11 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { newId, type TaskOutput } from '@orq/contracts';
 import type { Tx } from '@orq/db';
 import { parseSingleOrgRole } from '../../../../shared/auth/org-role.js';
-import { findPriorMutation, recordMutation } from '../../../../shared/database/mutation-log.js';
-import {
-  hasPostgresErrorCode,
-  UNIQUE_VIOLATION,
-} from '../../../../shared/database/postgres-errors.js';
+import { claimMutation } from '../../../../shared/database/mutation-log.js';
 import { TransactionService } from '../../../../shared/database/transaction.service.js';
 import { domainEvents } from '../../../../shared/domain-events/domain-events.js';
 import type { TenantIdentity } from '../../../../shared/request-context/request-context.js';
@@ -79,28 +75,17 @@ export class ChangeTaskStatusHandler {
   }
 
   /**
-   * Mismo criterio que `CreateTaskHandler` (PR 1): dos agujeros de
-   * idempotencia si esto fuera una sola pasada. `fromStatus: null` en el
-   * resultado marca un reintento (la mutación ya se había aplicado antes),
-   * para que `execute` no vuelva a emitir el evento de dominio.
+   * `fromStatus: null` en el resultado marca un reintento (la mutación ya se
+   * había aplicado antes), para que `execute` no vuelva a emitir el evento de
+   * dominio. Dos pedidos simultáneos con el mismo `client_mutation_id` se
+   * serializan en `claimMutation` (ADR-007): el segundo espera, ve la mutación
+   * confirmada y devuelve la respuesta del primero.
    */
-  private async applyOrReplayMutation(
+  private applyOrReplayMutation(
     command: ChangeTaskStatusCommand,
     tenant: TenantIdentity,
   ): Promise<{ task: TaskRow; fromStatus: string | null }> {
-    try {
-      return await this.transactions.withTenant((tx) => this.applyMutation(command, tenant, tx));
-    } catch (error) {
-      if (!hasPostgresErrorCode(error, UNIQUE_VIOLATION)) throw error;
-
-      const replayed = await this.transactions.withTenant(async (tx) => {
-        const prior = await findPriorMutation(tx, command.client_mutation_id);
-        if (!prior?.entityId) return null;
-        return findTaskById(tx, { organizationId: tenant.organizationId, taskId: prior.entityId });
-      });
-      if (!replayed) throw error;
-      return { task: replayed, fromStatus: null };
-    }
+    return this.transactions.withTenant((tx) => this.applyMutation(command, tenant, tx));
   }
 
   private async applyMutation(
@@ -108,13 +93,23 @@ export class ChangeTaskStatusHandler {
     tenant: TenantIdentity,
     tx: Tx,
   ): Promise<{ task: TaskRow; fromStatus: string | null }> {
-    const prior = await findPriorMutation(tx, command.client_mutation_id);
-    if (prior?.result === 'applied' && prior.entityId) {
+    // Primera sentencia de la transacción: se reserva la mutación antes de leer
+    // la tarea (ADR-007).
+    const claim = await claimMutation(tx, {
+      clientMutationId: command.client_mutation_id,
+      organizationId: tenant.organizationId,
+      memberId: tenant.memberId,
+      kind: 'task.change-status',
+      entityId: command.id,
+    });
+    if (!claim.claimed) {
       const existing = await findTaskById(tx, {
         organizationId: tenant.organizationId,
-        taskId: prior.entityId,
+        taskId: claim.prior.entityId ?? command.id,
       });
-      if (existing) return { task: existing, fromStatus: null };
+      // Si ya no la ve (le sacaron el acceso después), no hay respuesta que reconstruir.
+      if (!existing) throw new TaskNotFoundError(command.id);
+      return { task: existing, fromStatus: null };
     }
 
     // Orden fijo de ADR-017 §6: 404 → 403 → 409. RLS devuelve "no existe" para
@@ -169,15 +164,6 @@ export class ChangeTaskStatusHandler {
         : 'status_change',
       body: transition.reason,
       metadata: { from: current.status, to: command.to_status },
-    });
-
-    await recordMutation(tx, {
-      clientMutationId: command.client_mutation_id,
-      organizationId: tenant.organizationId,
-      memberId: tenant.memberId,
-      kind: 'task.change-status',
-      entityId: updated.id,
-      result: 'applied',
     });
 
     return { task: updated, fromStatus: current.status };
