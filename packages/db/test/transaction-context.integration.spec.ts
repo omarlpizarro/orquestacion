@@ -29,7 +29,10 @@ describe('contexto de transacción no filtra entre requests', () => {
 
   beforeAll(async () => {
     harness = await startPostgresHarness();
-    pool = createPool({ connectionString: harness.appConnectionUri, max: 1 });
+    pool = createPool(
+      { connectionString: harness.appConnectionUri, max: 1 },
+      'test:transaction-context',
+    );
     db = createDb(pool);
   });
 

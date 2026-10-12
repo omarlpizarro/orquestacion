@@ -3,7 +3,7 @@ import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testconta
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { Pool } from 'pg';
 import { getContainerRuntimeClient } from 'testcontainers';
-import { createDb, createPool, type Db } from '../client.js';
+import { attachPoolErrorLogger, createDb, createPool, type Db } from '../client.js';
 
 const migrationsFolder = fileURLToPath(new URL('../../migrations', import.meta.url));
 const sqlFolder = fileURLToPath(new URL('../../sql/', import.meta.url));
@@ -103,14 +103,17 @@ ${bootstrap.output}`);
   const appUri = withCredentials(superuserUri, 'app_login', 'app_login_test_password');
   const workerUri = withCredentials(superuserUri, 'app_worker', 'app_worker_test_password');
 
-  const ownerPool = createPool({ connectionString: migrationUri });
+  const ownerPool = createPool({ connectionString: migrationUri }, 'harness:app_owner');
   const ownerDb = createDb(ownerPool);
   await migrate(ownerDb, { migrationsFolder });
 
-  const appPool = createPool({ connectionString: appUri });
+  const appPool = createPool({ connectionString: appUri }, 'harness:app_login');
   const db = createDb(appPool);
-  const workerPool = createPool({ connectionString: workerUri });
-  const superuserPool = new Pool({ connectionString: superuserUri });
+  const workerPool = createPool({ connectionString: workerUri }, 'harness:app_worker');
+  const superuserPool = attachPoolErrorLogger(
+    new Pool({ connectionString: superuserUri }),
+    'harness:superuser',
+  );
   const workerDb = createDb(workerPool);
 
   return {

@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { Pool } from 'pg';
+import { attachPoolErrorLogger } from './client.js';
 import { installPgBoss } from './pgboss-install.js';
 
 const migrationsFolder = fileURLToPath(new URL('../migrations', import.meta.url));
@@ -14,7 +15,7 @@ async function main() {
     );
   }
 
-  const pool = new Pool({ connectionString });
+  const pool = attachPoolErrorLogger(new Pool({ connectionString }), 'migrate');
   try {
     const db = drizzle(pool);
     await migrate(db, { migrationsFolder });

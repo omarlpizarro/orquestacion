@@ -7,7 +7,7 @@ const QUEUE_HEALTH_PING = 'health.ping';
 
 async function main() {
   const env = loadWorkerEnv();
-  const pool = createPool({ connectionString: env.DATABASE_WORKER_URL });
+  const pool = createPool({ connectionString: env.DATABASE_WORKER_URL }, 'worker');
   const db = createDb(pool);
 
   // El esquema `pgboss` lo instala y actualiza el paso de migraciones
