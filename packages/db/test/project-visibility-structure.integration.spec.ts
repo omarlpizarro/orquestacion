@@ -184,8 +184,8 @@ describe('estructura de visibilidad de proyectos (0012)', () => {
     async function insertUpdate(tx: Tx, taskId: string, projectId: string | null) {
       const id = randomUUID();
       await tx.execute(sql`
-        insert into task_update (id, organization_id, created_by_member_id, task_id, project_id, kind)
-        values (${id}, ${orgA}, ${member}, ${taskId}, ${projectId}, 'comment')
+        insert into task_update (id, organization_id, created_by_member_id, task_id, project_id, kind, body)
+        values (${id}, ${orgA}, ${member}, ${taskId}, ${projectId}, 'comment', 'novedad')
       `);
       return id;
     }
@@ -228,8 +228,8 @@ describe('estructura de visibilidad de proyectos (0012)', () => {
       const id = randomUUID();
       await asA((tx) =>
         tx.execute(sql`
-          insert into task_update (id, organization_id, created_by_member_id, task_id, kind)
-          values (${id}, ${orgA}, ${member}, ${taskA}, 'comment')
+          insert into task_update (id, organization_id, created_by_member_id, task_id, kind, body)
+          values (${id}, ${orgA}, ${member}, ${taskA}, 'comment', 'novedad')
         `),
       );
       await expectPgError(
