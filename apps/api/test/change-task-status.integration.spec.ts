@@ -339,4 +339,25 @@ describe('PATCH /projects/tasks/:id/status (integración)', () => {
     expect(second.json()).toEqual(first.json());
     expect(await taskUpdatesFor(task.id)).toHaveLength(1);
   });
+
+  it('dos pedidos simultáneos con el mismo client_mutation_id producen un solo efecto y la misma respuesta', async () => {
+    const task = await createTask({});
+    const payload = {
+      client_mutation_id: newId(),
+      to_status: 'in_progress',
+      expected_version: task.version,
+    };
+
+    const [first, second] = await Promise.all([
+      changeStatus(ownerCookie, task.id, payload),
+      changeStatus(ownerCookie, task.id, payload),
+    ]);
+
+    // Sin seguir `cause` en `hasPostgresErrorCode` (#31) el que perdía la carrera de
+    // la PK de `mutation_log` recibía un 500.
+    expect(first.statusCode, first.body).toBe(200);
+    expect(second.statusCode, second.body).toBe(200);
+    expect(second.json()).toEqual(first.json());
+    expect(await taskUpdatesFor(task.id)).toHaveLength(1);
+  });
 });
