@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import { MutationIdReusedError } from '../errors/mutation-id-reused.error.js';
 
 export interface PriorMutation {
+  kind: string;
   entityId: string | null;
   result: 'applied' | 'rejected' | 'duplicate';
   rejectionReason: string | null;
@@ -45,6 +46,14 @@ export type ClaimMutationResult =
  * `mutation_log` tiene RLS por organización. Si el id ya lo usó otra
  * organización la fila existe pero no se ve: no hay nada que reconstruir y se
  * rechaza (`MutationIdReusedError`) sin decir de quién era.
+ *
+ * Lo registrado tiene que ser **la misma operación** que la de este pedido: mismo
+ * `kind` y mismo `entity_id`. Un id reusado para otra cosa (crear la tarea A y
+ * después cambiar el estado de la tarea B con el mismo id) no es un reintento, y
+ * devolver la respuesta de A como si fuera la de B es peor que rechazarlo. Es una
+ * mitigación parcial de CLAUDE.md §13 #6: un reintento con el mismo `kind` y la
+ * misma entidad pero datos distintos (otro `to_status` sobre la misma tarea)
+ * sigue devolviendo el resultado anterior en silencio.
  */
 export async function claimMutation(
   tx: Tx,
@@ -63,8 +72,22 @@ export async function claimMutation(
   if (inserted.rows.length > 0) return { claimed: true };
 
   const prior = await findPriorMutation(tx, params.clientMutationId);
-  if (!prior) throw new MutationIdReusedError();
+  if (!prior || !isSameOperation(prior, params)) throw new MutationIdReusedError();
   return { claimed: false, prior };
+}
+
+/**
+ * Los ids se comparan en minúsculas: `entity_id` es una columna `uuid` (Postgres
+ * lo devuelve en minúsculas) y el cliente puede haber mandado el id en mayúsculas.
+ */
+function isSameOperation(
+  prior: PriorMutation,
+  params: Pick<ClaimMutationParams, 'kind' | 'entityId'>,
+): boolean {
+  return (
+    prior.kind === params.kind &&
+    (prior.entityId?.toLowerCase() ?? null) === (params.entityId?.toLowerCase() ?? null)
+  );
 }
 
 export async function findPriorMutation(
@@ -72,14 +95,20 @@ export async function findPriorMutation(
   clientMutationId: string,
 ): Promise<PriorMutation | null> {
   const result = await tx.execute<{
+    kind: string;
     entity_id: string | null;
     result: 'applied' | 'rejected' | 'duplicate';
     rejection_reason: string | null;
   }>(sql`
-    select entity_id, result, rejection_reason from mutation_log
+    select kind, entity_id, result, rejection_reason from mutation_log
     where client_mutation_id = ${clientMutationId}
   `);
   const row = result.rows[0];
   if (!row) return null;
-  return { entityId: row.entity_id, result: row.result, rejectionReason: row.rejection_reason };
+  return {
+    kind: row.kind,
+    entityId: row.entity_id,
+    result: row.result,
+    rejectionReason: row.rejection_reason,
+  };
 }

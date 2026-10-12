@@ -24,13 +24,24 @@ describe('claimMutation (integración)', () => {
   const inOrg = <T>(organizationId: string, memberId: string, run: (tx: Tx) => Promise<T>) =>
     withTenantTransaction(harness.db, { organizationId, memberId, requestId: newId() }, run);
 
+  // La misma operación sobre la misma entidad: cada id de mutación apunta a una
+  // entidad fija, para que un reintento sea de verdad el mismo pedido.
+  const entityByMutation = new Map<string, string>();
+  const entityFor = (clientMutationId: string) => {
+    const known = entityByMutation.get(clientMutationId);
+    if (known) return known;
+    const created = newId();
+    entityByMutation.set(clientMutationId, created);
+    return created;
+  };
+
   const claim = (tx: Tx, clientMutationId: string, organizationId = orgA, memberId = memberA) =>
     claimMutation(tx, {
       clientMutationId,
       organizationId,
       memberId,
       kind: 'test.claim',
-      entityId: newId(),
+      entityId: entityFor(clientMutationId),
     });
 
   const rowsFor = (clientMutationId: string) =>
@@ -161,5 +172,57 @@ describe('claimMutation (integración)', () => {
       MutationIdReusedError,
     );
     expect(await rowsFor(id)).toBe(0);
+  });
+
+  describe('mismo id, otra operación (mitigación parcial de CLAUDE.md §13 #6)', () => {
+    const claimAs = (tx: Tx, clientMutationId: string, kind: string, entityId: string | null) =>
+      claimMutation(tx, {
+        clientMutationId,
+        organizationId: orgA,
+        memberId: memberA,
+        kind,
+        entityId,
+      });
+
+    it('mismo id con otro kind: se rechaza, no se devuelve la respuesta de la otra operación', async () => {
+      const id = newId();
+      const entity = newId();
+      await inOrg(orgA, memberA, (tx) => claimAs(tx, id, 'task.create', entity));
+
+      await expect(
+        inOrg(orgA, memberA, (tx) => claimAs(tx, id, 'task.change-status', entity)),
+      ).rejects.toBeInstanceOf(MutationIdReusedError);
+    });
+
+    it('mismo id y mismo kind pero otra entidad: se rechaza', async () => {
+      const id = newId();
+      await inOrg(orgA, memberA, (tx) => claimAs(tx, id, 'task.change-status', newId()));
+
+      await expect(
+        inOrg(orgA, memberA, (tx) => claimAs(tx, id, 'task.change-status', newId())),
+      ).rejects.toBeInstanceOf(MutationIdReusedError);
+    });
+
+    it('mismo kind y misma entidad: es el reintento, se devuelve lo registrado (también si el id viaja en mayúsculas)', async () => {
+      const id = newId();
+      const entity = newId();
+      await inOrg(orgA, memberA, (tx) => claimAs(tx, id, 'task.change-status', entity));
+
+      const retry = await inOrg(orgA, memberA, (tx) =>
+        claimAs(tx, id, 'task.change-status', entity.toUpperCase()),
+      );
+
+      expect(retry).toMatchObject({ claimed: false, prior: { kind: 'task.change-status' } });
+    });
+
+    it('la reserva rechazada no deja nada nuevo en mutation_log', async () => {
+      const id = newId();
+      await inOrg(orgA, memberA, (tx) => claimAs(tx, id, 'task.create', newId()));
+      await expect(
+        inOrg(orgA, memberA, (tx) => claimAs(tx, id, 'task.change-status', newId())),
+      ).rejects.toBeInstanceOf(MutationIdReusedError);
+
+      expect(await rowsFor(id)).toBe(1);
+    });
   });
 });

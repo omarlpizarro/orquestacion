@@ -171,7 +171,12 @@ describe('CreateTaskHandler', () => {
   it('reintento con el mismo client_mutation_id no vuelve a insertar ni a emitir el evento', async () => {
     vi.mocked(claimMutation).mockResolvedValue({
       claimed: false,
-      prior: { entityId: insertedTask.id, result: 'applied', rejectionReason: null },
+      prior: {
+        kind: 'task.create',
+        entityId: insertedTask.id,
+        result: 'applied',
+        rejectionReason: null,
+      },
     });
     vi.mocked(findTaskById).mockResolvedValue(insertedTask);
     const handler = buildHandler();
@@ -190,7 +195,12 @@ describe('CreateTaskHandler', () => {
   it('si la mutación ya está registrada pero la tarea ya no se ve, responde TaskNotFoundError', async () => {
     vi.mocked(claimMutation).mockResolvedValue({
       claimed: false,
-      prior: { entityId: insertedTask.id, result: 'applied', rejectionReason: null },
+      prior: {
+        kind: 'task.create',
+        entityId: insertedTask.id,
+        result: 'applied',
+        rejectionReason: null,
+      },
     });
     vi.mocked(findTaskById).mockResolvedValue(null);
     const handler = buildHandler();

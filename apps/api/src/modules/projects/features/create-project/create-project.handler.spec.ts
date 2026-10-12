@@ -199,7 +199,12 @@ describe('CreateProjectHandler', () => {
   describe('idempotencia', () => {
     const alreadyApplied: ClaimMutationResult = {
       claimed: false,
-      prior: { entityId: command.id, result: 'applied', rejectionReason: null },
+      prior: {
+        kind: 'project.create',
+        entityId: command.id,
+        result: 'applied',
+        rejectionReason: null,
+      },
     };
 
     it('un reintento de una mutación aplicada devuelve el proyecto sin insertar nada', async () => {

@@ -426,7 +426,12 @@ describe('ChangeTaskStatusHandler', () => {
   it('reintento con el mismo client_mutation_id no vuelve a aplicar la mutación ni a emitir el evento', async () => {
     vi.mocked(claimMutation).mockResolvedValue({
       claimed: false,
-      prior: { entityId: baseCommand.id, result: 'applied', rejectionReason: null },
+      prior: {
+        kind: 'task.change-status',
+        entityId: baseCommand.id,
+        result: 'applied',
+        rejectionReason: null,
+      },
     });
     vi.mocked(findTaskById).mockResolvedValue(inProgressTask);
     const { handler, collaboration } = buildHandler();
@@ -447,7 +452,12 @@ describe('ChangeTaskStatusHandler', () => {
     // respondía 422 (transición inválida) o 409 (versión). Ahora no lo evalúa.
     vi.mocked(claimMutation).mockResolvedValue({
       claimed: false,
-      prior: { entityId: baseCommand.id, result: 'applied', rejectionReason: null },
+      prior: {
+        kind: 'task.change-status',
+        entityId: baseCommand.id,
+        result: 'applied',
+        rejectionReason: null,
+      },
     });
     vi.mocked(findTaskById).mockResolvedValue({ ...inProgressTask, version: 5 });
     const { handler } = buildHandler();

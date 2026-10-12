@@ -360,4 +360,63 @@ describe('PATCH /projects/tasks/:id/status (integración)', () => {
     expect(second.json()).toEqual(first.json());
     expect(await taskUpdatesFor(task.id)).toHaveLength(1);
   });
+
+  describe('un client_mutation_id reusado para otra operación (CLAUDE.md §13 #6, mitigación parcial)', () => {
+    it('crear la tarea A y después cambiar el estado de la tarea B con el mismo id: 409, y B no se toca', async () => {
+      const reused = newId();
+      await createTask({ client_mutation_id: reused });
+      const taskB = await createTask({});
+
+      const response = await changeStatus(ownerCookie, taskB.id, {
+        client_mutation_id: reused,
+        to_status: 'in_progress',
+        expected_version: taskB.version,
+      });
+
+      expect(response.statusCode, response.body).toBe(409);
+      expect(response.json().data).toMatchObject({ domain_code: 'client_mutation_id_reused' });
+      expect(await taskUpdatesFor(taskB.id)).toHaveLength(0);
+    });
+
+    it('cambiar el estado de la tarea A y después el de la tarea B con el mismo id (misma operación, otra entidad): 409', async () => {
+      const reused = newId();
+      const taskA = await createTask({});
+      const taskB = await createTask({});
+      const first = await changeStatus(ownerCookie, taskA.id, {
+        client_mutation_id: reused,
+        to_status: 'in_progress',
+        expected_version: taskA.version,
+      });
+      expect(first.statusCode, first.body).toBe(200);
+
+      const response = await changeStatus(ownerCookie, taskB.id, {
+        client_mutation_id: reused,
+        to_status: 'in_progress',
+        expected_version: taskB.version,
+      });
+
+      expect(response.statusCode, response.body).toBe(409);
+      expect(response.json().data).toMatchObject({ domain_code: 'client_mutation_id_reused' });
+      expect(await taskUpdatesFor(taskB.id)).toHaveLength(0);
+    });
+
+    it('el reintento legítimo (misma operación, misma entidad) sigue devolviendo lo mismo, aunque el id viaje en mayúsculas', async () => {
+      const mutationId = newId();
+      const task = await createTask({});
+      const payload = { to_status: 'in_progress', expected_version: task.version };
+
+      const first = await changeStatus(ownerCookie, task.id, {
+        client_mutation_id: mutationId,
+        ...payload,
+      });
+      const retry = await changeStatus(ownerCookie, task.id.toUpperCase(), {
+        client_mutation_id: mutationId.toUpperCase(),
+        ...payload,
+      });
+
+      expect(first.statusCode, first.body).toBe(200);
+      expect(retry.statusCode, retry.body).toBe(200);
+      expect(retry.json()).toEqual(first.json());
+    });
+  });
 });

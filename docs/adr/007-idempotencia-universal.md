@@ -114,10 +114,22 @@ sea idempotente también entre pedidos distintos. Ya no hay reintentos
 automáticos por violación de unicidad (`retryOnceOnUniqueViolation` se
 eliminó).
 
+**Un id reusado para otra operación (mitigación parcial de CLAUDE.md §13 #6).**
+Cuando `claimMutation` no reserva y encuentra la mutación previa, compara su
+`kind` y su `entity_id` con los del pedido actual (los ids, en minúsculas: la
+columna es `uuid` y el cliente pudo mandarlo en mayúsculas). Si no coinciden no
+es un reintento sino un id reusado: `MutationIdReusedError` (409,
+`client_mutation_id_reused`) y no se toca nada. Sin esto, crear la tarea A y
+después cambiar el estado de la tarea B con el mismo id devolvía la respuesta de
+A como si fuera la de B. **Lo que sigue sin detectarse:** el mismo `kind` y la
+misma entidad con datos distintos (otro `to_status` sobre la misma tarea, otro
+miembro en `add-project-member` sobre el mismo proyecto) sigue devolviendo el
+resultado anterior en silencio; cerrarlo exige guardar un hash del payload.
+
 **Cómo se aplica a un handler nuevo.** `claimMutation` va antes de cualquier
 lectura; la rama "ya reservada" reconstruye la respuesta sin volver a evaluar
 reglas de negocio contra el estado actual; el resto de la lógica va después, en
 la misma transacción. Cada handler de escritura tiene un test de dos pedidos
 simultáneos con el mismo `client_mutation_id` (los dos reciben la misma
 respuesta exitosa y hay un solo efecto), y `claim-mutation.integration.spec.ts`
-verifica la reserva contra Postgres real (espera, rollback, otra organización).
+verifica la reserva contra Postgres real (espera, rollback, otra organización, id reusado para otro `kind` o entidad).
