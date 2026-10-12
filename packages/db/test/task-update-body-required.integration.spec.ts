@@ -82,4 +82,12 @@ describe('task_update exige texto real para comment, block_report y reopen', () 
       await expect(inTenant((tx) => insertUpdate(tx, kind, body))).resolves.toBeDefined();
     });
   });
+
+  it('la constraint quedó validada por la migración 0018 (no solo agregada NOT VALID)', async () => {
+    const result = await harness.superuserPool.query<{ convalidated: boolean }>(
+      "select convalidated from pg_constraint where conname = 'task_update_body_required_check'",
+    );
+
+    expect(result.rows).toEqual([{ convalidated: true }]);
+  });
 });
