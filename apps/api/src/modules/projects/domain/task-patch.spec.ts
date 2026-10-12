@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { diffTaskPatch, type EditableTaskFields } from './task-patch.js';
+import { diffTaskPatch, type EditableTaskFields, isTaskFrozenForEdit } from './task-patch.js';
 
 const current: EditableTaskFields = {
   title: 'Excavar',
@@ -106,4 +106,17 @@ describe('diffTaskPatch', () => {
       expect(diffTaskPatch(current, { title: 'Otro' }).datesIncoherent).toBe(false);
     });
   });
+});
+
+describe('isTaskFrozenForEdit', () => {
+  it('solo las canceladas están congeladas: cancelar no tiene vuelta atrás (ADR-012)', () => {
+    expect(isTaskFrozenForEdit('cancelled')).toBe(true);
+  });
+
+  it.each(['pending', 'in_progress', 'blocked', 'in_review', 'done'])(
+    '%s se edita (done se puede reabrir)',
+    (status) => {
+      expect(isTaskFrozenForEdit(status)).toBe(false);
+    },
+  );
 });

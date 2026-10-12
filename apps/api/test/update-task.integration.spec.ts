@@ -210,36 +210,145 @@ describe('PATCH /projects/tasks/{id} (integración)', () => {
       });
     });
 
-    it('no toca el estado, el responsable ni el padre aunque vengan en el pedido', async () => {
-      const task = await createTask(openProjectId, { assignee_member_id: manager.memberId });
+    it.each([
+      ['status', 'done'],
+      ['assignee_member_id', 'alguien'],
+      ['parent_task_id', '01945f4e-0000-7000-8000-000000000009'],
+      ['campo_inventado', 1],
+    ])(
+      'un campo que no se edita acá (%s) se rechaza con 400 y se nombra, sin cambiar nada',
+      async (field, value) => {
+        const task = await createTask(openProjectId, { assignee_member_id: manager.memberId });
+
+        const response = await edit(owner.cookie, task, {
+          title: 'Solo el título',
+          [field]: value,
+        });
+
+        expect(response.statusCode, response.body).toBe(400);
+        // El cliente tiene que enterarse de cuál campo no se aplicó.
+        expect(response.body).toContain(field);
+        const read = await call(owner.cookie, 'GET', `/projects/tasks/${task.id}`);
+        expect(read.json()).toMatchObject({
+          title: 'Excavar',
+          version: task.version,
+          status: 'pending',
+          assignee_member_id: manager.memberId,
+          parent_task_id: null,
+        });
+      },
+    );
+
+    it('si vienen varios campos ajenos, los nombra a todos', async () => {
+      const task = await createTask(openProjectId);
 
       const response = await edit(owner.cookie, task, {
-        title: 'Solo el título',
+        title: 'X',
         status: 'done',
-        assignee_member_id: operatorAssigned.memberId,
-        parent_task_id: newId(),
+        assignee_member_id: 'alguien',
       });
 
-      expect(response.statusCode, response.body).toBe(200);
-      expect(response.json()).toMatchObject({
-        title: 'Solo el título',
-        status: 'pending',
-        assignee_member_id: manager.memberId,
-        parent_task_id: null,
-      });
+      expect(response.statusCode, response.body).toBe(400);
+      expect(response.body).toContain('status');
+      expect(response.body).toContain('assignee_member_id');
     });
 
     it('un pedido sin ningún campo editable se rechaza con 400', async () => {
       const task = await createTask(openProjectId);
 
       expect((await edit(owner.cookie, task, {})).statusCode).toBe(400);
-      expect((await edit(owner.cookie, task, { status: 'done' })).statusCode).toBe(400);
     });
 
     it('un título vacío se rechaza con 400', async () => {
       const task = await createTask(openProjectId);
 
       expect((await edit(owner.cookie, task, { title: '   ' })).statusCode).toBe(400);
+    });
+  });
+
+  describe('tareas congeladas (ADR-012)', () => {
+    const changeStatus = (
+      cookie: string,
+      task: { id: string; version: number },
+      toStatus: string,
+      extra: object = {},
+    ) =>
+      call(cookie, 'PATCH', `/projects/tasks/${task.id}/status`, {
+        client_mutation_id: newId(),
+        to_status: toStatus,
+        expected_version: task.version,
+        ...extra,
+      });
+
+    it('una tarea cancelada responde 422 task_edit_cancelled y no cambia nada', async () => {
+      const task = await createTask(openProjectId);
+      const cancelled = await changeStatus(owner.cookie, task, 'cancelled', {
+        reason: 'Se canceló la obra',
+      });
+      expect(cancelled.statusCode, cancelled.body).toBe(200);
+      const version = cancelled.json().version;
+
+      const response = await edit(owner.cookie, { id: task.id, version }, { title: 'Reabierta' });
+
+      expect(response.statusCode, response.body).toBe(422);
+      expect(response.json().data).toMatchObject({ domain_code: 'task_edit_cancelled' });
+      const read = await call(owner.cookie, 'GET', `/projects/tasks/${task.id}`);
+      expect(read.json()).toMatchObject({ title: 'Excavar', version, status: 'cancelled' });
+    });
+
+    it('tampoco un pedido sin cambios reales ni con una versión vieja: 422, no 409', async () => {
+      const task = await createTask(openProjectId);
+      const cancelled = await changeStatus(owner.cookie, task, 'cancelled', {
+        reason: 'Se canceló la obra',
+      });
+      const version = cancelled.json().version;
+
+      const same = await edit(owner.cookie, { id: task.id, version }, { title: 'Excavar' });
+      const stale = await edit(owner.cookie, task, { title: 'Nuevo' });
+
+      expect(same.statusCode, same.body).toBe(422);
+      expect(stale.statusCode, stale.body).toBe(422);
+    });
+
+    it('quien no puede editar recibe 403 aunque esté cancelada: no se entera de su estado', async () => {
+      const task = await createTask(reservedProjectId, {
+        assignee_member_id: operatorAssigned.memberId,
+      });
+      const cancelled = await changeStatus(owner.cookie, task, 'cancelled', {
+        reason: 'Se canceló la obra',
+      });
+
+      const response = await edit(
+        operatorAssigned.cookie,
+        { id: task.id, version: cancelled.json().version },
+        { title: 'X' },
+      );
+
+      expect(response.statusCode, response.body).toBe(403);
+    });
+
+    it('una tarea done sí se edita: se puede reabrir', async () => {
+      const task = await createTask(openProjectId);
+      const started = await changeStatus(owner.cookie, task, 'in_progress');
+      expect(started.statusCode, started.body).toBe(200);
+      const done = await changeStatus(
+        owner.cookie,
+        { id: task.id, version: started.json().version },
+        'done',
+      );
+      expect(done.statusCode, done.body).toBe(200);
+
+      const response = await edit(
+        owner.cookie,
+        { id: task.id, version: done.json().version },
+        { title: 'Corregida después de terminar' },
+      );
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json()).toMatchObject({
+        title: 'Corregida después de terminar',
+        status: 'done',
+      });
     });
   });
 

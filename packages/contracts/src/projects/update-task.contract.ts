@@ -21,7 +21,10 @@ const editableFields = {
 export const editableTaskFields = Object.keys(editableFields) as Array<keyof typeof editableFields>;
 
 export const updateTaskInputSchema = withClientMutationId(
-  z.object({
+  // Estricto: un campo que no se edita acá (el estado, el responsable, el padre, o
+  // cualquier otro) se rechaza con 400 nombrando el campo. Descartarlo en silencio
+  // haría creer al cliente que cambió algo que no cambió (CLAUDE.md §9).
+  z.strictObject({
     // Path param (`{id}`, ruta compacta de oRPC: CLAUDE.md §8 / ADR-005), igual que
     // `change-task-status`.
     id: idSchema,
@@ -38,10 +41,12 @@ export type UpdateTaskInput = z.infer<typeof updateTaskInputSchema>;
 
 /**
  * Edición parcial de una tarea. **No toca** el estado (`change-task-status`) ni el
- * responsable (`assign-task`): si vienen en el pedido se ignoran. Sin `.errors()`
- * propio: 404 si no existe o quien pide no la ve, 403 si la ve pero no puede
- * editarla, 409 por versión, 422 por fechas incoherentes; `base` los declara y
- * `domain_code` los distingue (CLAUDE.md §8). Devuelve la tarea.
+ * responsable (`assign-task`): si vienen en el pedido —o cualquier otro campo que no
+ * sea editable acá— se rechaza con 400 y se nombra el campo. Sin `.errors()` propio:
+ * 404 si no existe o quien pide no la ve, 403 si la ve pero no puede editarla, 422 si
+ * está cancelada (ADR-012: cancelar no tiene vuelta atrás) o si las fechas quedan
+ * incoherentes, 409 por versión; `base` los declara y `domain_code` los distingue
+ * (CLAUDE.md §8). Las `done` sí se editan: se pueden reabrir. Devuelve la tarea.
  */
 export const updateTaskContract = base
   .route({

@@ -28,6 +28,16 @@ export interface TaskPatchResult {
   datesIncoherent: boolean;
 }
 
+/**
+ * Estados en los que la tarea no se edita. Solo `cancelled`: es terminal, cancelar no
+ * tiene vuelta atrás (ADR-012). Una tarea `done` sí se edita, porque se puede reabrir.
+ */
+const FROZEN_FOR_EDIT: readonly string[] = ['cancelled'];
+
+export function isTaskFrozenForEdit(status: string): boolean {
+  return FROZEN_FOR_EDIT.includes(status);
+}
+
 const sameInstant = (a: string | null, b: string | null): boolean =>
   a === b || (a !== null && b !== null && Date.parse(a) === Date.parse(b));
 

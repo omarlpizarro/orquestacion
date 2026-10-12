@@ -54,21 +54,43 @@ describe('updateTaskInputSchema', () => {
     ).toBe(false);
   });
 
-  it('no deja pasar el estado, el responsable ni el padre: se ignoran', () => {
-    const parsed = updateTaskInputSchema.parse({
-      ...base,
-      title: 'Nuevo',
-      status: 'done',
-      assignee_member_id: 'alguien',
-      parent_task_id: '01945f4e-0000-7000-8000-000000000009',
+  describe('campos que no se editan acá (CLAUDE.md §9: no se descartan en silencio)', () => {
+    it.each([
+      ['status', 'done'],
+      ['assignee_member_id', 'alguien'],
+      ['parent_task_id', '01945f4e-0000-7000-8000-000000000009'],
+      ['is_milestone', true],
+      ['project_id', '01945f4e-0000-7000-8000-000000000009'],
+      ['campo_inventado', 1],
+    ])('rechaza %s y lo nombra', (field, value) => {
+      const result = updateTaskInputSchema.safeParse({ ...base, title: 'Nuevo', [field]: value });
+
+      expect(result.success).toBe(false);
+      const unrecognized = result.error?.issues.find((issue) => issue.code === 'unrecognized_keys');
+      expect(unrecognized).toMatchObject({ keys: [field] });
+      expect(unrecognized?.message).toContain(field);
     });
 
-    expect(parsed).not.toHaveProperty('status');
-    expect(parsed).not.toHaveProperty('assignee_member_id');
-    expect(parsed).not.toHaveProperty('parent_task_id');
-  });
+    it('nombra todos los campos ajenos si vienen varios', () => {
+      const result = updateTaskInputSchema.safeParse({
+        ...base,
+        title: 'Nuevo',
+        status: 'done',
+        assignee_member_id: 'alguien',
+      });
 
-  it('un pedido que solo trae campos ignorados cuenta como vacío', () => {
-    expect(updateTaskInputSchema.safeParse({ ...base, status: 'done' }).success).toBe(false);
+      const unrecognized = result.error?.issues.find((issue) => issue.code === 'unrecognized_keys');
+      expect([...(unrecognized as { keys: string[] }).keys].sort()).toEqual([
+        'assignee_member_id',
+        'status',
+      ]);
+    });
+
+    it('un pedido que solo trae un campo ajeno se rechaza por el campo ajeno', () => {
+      const result = updateTaskInputSchema.safeParse({ ...base, status: 'done' });
+
+      expect(result.success).toBe(false);
+      expect(result.error?.issues.some((issue) => issue.code === 'unrecognized_keys')).toBe(true);
+    });
   });
 });

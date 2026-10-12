@@ -86,7 +86,7 @@ Orden del resto de la fase (revisado 2026-09-28, reemplaza cualquier orden impl�
   1. Audit de `task`: triggers (solo migración).
   2. Lectura de tareas: `get-task` y `list-project-tasks`, con el árbol de subtareas y las novedades. **Hecho (#44).**
   3. Comentarios: `add-task-comment`, un `task_update` de tipo `comment`, **solo texto** (sin adjuntos). **Hecho (#45).**
-  4. `update-task` (en las fechas planificadas gana el servidor, CLAUDE.md §9).
+  4. `update-task` (en las fechas planificadas gana el servidor, CLAUDE.md §9). **Hecho (#46):** título, descripción, criticidad y fechas; solo `owner`, `director` y `manager` con acceso completo (capacidad `task:update`); un campo que no se edita ahí (estado, responsable, padre…) se rechaza con 400 nombrándolo; las `cancelled` están congeladas (422) y las `done` se editan.
   5. `assign-task` (reasignar; en asignaciones gana el servidor). Acá se resuelve también qué pasa con las tareas asignadas al revocar un acceso a sitio.
   6. `delete-task` (`deleted_at` sobre el subárbol).
   7. Audit, parte 2: job de particiones con pg-boss (suma el `worker` a `compose.server.yml`, un `EXECUTE` para `app_worker` en `ensure-roles.sql` y el ADR de retención).

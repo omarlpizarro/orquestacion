@@ -12,6 +12,7 @@ import {
 import { TenancyService } from '../../../tenancy/tenancy.module.js';
 import { ProjectNotFoundError } from '../../domain/errors/project-not-found.error.js';
 import { TaskDatesIncoherentError } from '../../domain/errors/task-dates-incoherent.error.js';
+import { TaskEditCancelledError } from '../../domain/errors/task-edit-cancelled.error.js';
 import { TaskEditForbiddenError } from '../../domain/errors/task-edit-forbidden.error.js';
 import { TaskEditProjectAccessError } from '../../domain/errors/task-edit-project-access.error.js';
 import { TaskNotFoundError } from '../../domain/errors/task-not-found.error.js';
@@ -20,6 +21,7 @@ import { localDatetimeToUtc } from '../../domain/local-datetime-to-utc.js';
 import {
   diffTaskPatch,
   type EditableTaskFields,
+  isTaskFrozenForEdit,
   type TaskCriticality,
   type TaskPatch,
 } from '../../domain/task-patch.js';
@@ -117,6 +119,10 @@ export class UpdateTaskHandler {
     if (!(await this.projectAccess.hasFullAccess(tx, { projectId: current.projectId }))) {
       throw new TaskEditProjectAccessError();
     }
+
+    // Regla de dominio, después de autorizar y antes de comparar la versión (igual que
+    // la máquina de estados): una tarea cancelada no se edita, sea cual sea el pedido.
+    if (isTaskFrozenForEdit(current.status)) throw new TaskEditCancelledError();
 
     // Después de autorizar, a propósito: un 409 le diría a quien no puede tocar la
     // tarea que existe y que cambió desde que la vio. En las fechas gana el servidor

@@ -5,6 +5,7 @@ import { domainEvents } from '../../../../shared/domain-events/domain-events.js'
 import { runWithRequestContext } from '../../../../shared/request-context/request-context.js';
 import type { TenancyService } from '../../../tenancy/tenancy.module.js';
 import { TaskDatesIncoherentError } from '../../domain/errors/task-dates-incoherent.error.js';
+import { TaskEditCancelledError } from '../../domain/errors/task-edit-cancelled.error.js';
 import { TaskEditForbiddenError } from '../../domain/errors/task-edit-forbidden.error.js';
 import { TaskEditProjectAccessError } from '../../domain/errors/task-edit-project-access.error.js';
 import { TaskNotFoundError } from '../../domain/errors/task-not-found.error.js';
@@ -154,6 +155,45 @@ describe('UpdateTaskHandler', () => {
       await expect(
         run(handler, { ...baseCommand, expected_version: 1, title: 'X' }, 'operator'),
       ).rejects.toBeInstanceOf(TaskEditForbiddenError);
+    });
+  });
+
+  describe('tareas congeladas (ADR-012)', () => {
+    it('una tarea cancelada responde 422 y no escribe, sea cual sea el pedido', async () => {
+      vi.mocked(findVisibleTask).mockResolvedValue({ ...currentTask, status: 'cancelled' });
+      const { handler } = buildHandler();
+
+      await expect(run(handler, { ...baseCommand, title: 'Nuevo' })).rejects.toBeInstanceOf(
+        TaskEditCancelledError,
+      );
+      // Tampoco un pedido sin cambios reales.
+      await expect(run(handler, { ...baseCommand, title: 'Excavar' })).rejects.toBeInstanceOf(
+        TaskEditCancelledError,
+      );
+      expect(updateTaskFields).not.toHaveBeenCalled();
+    });
+
+    it('la regla va después de autorizar y antes de la versión', async () => {
+      vi.mocked(findVisibleTask).mockResolvedValue({ ...currentTask, status: 'cancelled' });
+      const { handler } = buildHandler();
+
+      // Sin permiso: 403, aunque esté cancelada (no se entera de su estado).
+      await expect(run(handler, { ...baseCommand, title: 'X' }, 'operator')).rejects.toBeInstanceOf(
+        TaskEditForbiddenError,
+      );
+      // Con permiso y una versión vieja: 422, no 409.
+      await expect(
+        run(handler, { ...baseCommand, expected_version: 1, title: 'X' }),
+      ).rejects.toBeInstanceOf(TaskEditCancelledError);
+    });
+
+    it('una tarea done sí se edita: se puede reabrir', async () => {
+      vi.mocked(findVisibleTask).mockResolvedValue({ ...currentTask, status: 'done' });
+      const { handler } = buildHandler();
+
+      await run(handler, { ...baseCommand, title: 'Nuevo' });
+
+      expect(updateTaskFields).toHaveBeenCalled();
     });
   });
 
