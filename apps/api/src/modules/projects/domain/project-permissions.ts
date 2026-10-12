@@ -31,18 +31,17 @@ export type MemberRemovalDecision = 'allowed' | 'forbidden' | 'creator_removal_f
 
 /**
  * Quitar un miembro:
- * - Al creador lo quitan solo `owner` o `director` (capacidad de rol), y no
- *   puede salirse por su cuenta si no la tiene.
- * - Cualquier otro miembro puede salirse a sí mismo.
- * - Quitar a otro exige poder manejar el proyecto.
+ * - Cualquier miembro, el creador incluido, puede quitarse a sí mismo.
+ * - Cuando lo quita otra persona, al creador lo quitan solo `owner` o
+ *   `director` (capacidad de rol).
+ * - Quitar a cualquier otro exige poder manejar el proyecto.
  */
 export function decideMemberRemoval(context: MemberRemovalContext): MemberRemovalDecision {
-  const targetIsCreator = context.targetMemberId === context.creatorMemberId;
-  if (targetIsCreator) {
+  if (context.targetMemberId === context.actorMemberId) return 'allowed';
+  if (context.targetMemberId === context.creatorMemberId) {
     return context.hasFullAccess && context.hasRoleCapability
       ? 'allowed'
       : 'creator_removal_forbidden';
   }
-  if (context.targetMemberId === context.actorMemberId) return 'allowed';
   return canManageProject(context) ? 'allowed' : 'forbidden';
 }

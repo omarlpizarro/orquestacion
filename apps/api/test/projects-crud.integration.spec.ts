@@ -622,7 +622,7 @@ describe('CRUD de proyectos (integración)', () => {
       expect((await call(director.cookie, 'GET', `/projects/${project.id}`)).statusCode).toBe(200);
     });
 
-    it('a un creador que ya no es owner ni director no lo quita otro miembro ni él mismo: 403', async () => {
+    it('a un creador que ya no es owner ni director no lo quita otro miembro (403), pero él sí puede salirse', async () => {
       const creator = await addMemberWithRole(app, auth, {
         organizationId,
         role: 'director',
@@ -635,14 +635,15 @@ describe('CRUD de proyectos (integración)', () => {
       await addMember(creator.cookie, project.id, operator.memberId);
 
       const byMember = await removeMember(operator.cookie, project.id, creator.memberId);
-      const bySelf = await removeMember(creator.cookie, project.id, creator.memberId);
+      expect(byMember.statusCode, byMember.body).toBe(403);
+      expect(byMember.json().data).toMatchObject({
+        domain_code: 'project_creator_removal_forbidden',
+      });
+      expect((await call(creator.cookie, 'GET', `/projects/${project.id}`)).statusCode).toBe(200);
 
-      for (const response of [byMember, bySelf]) {
-        expect(response.statusCode, response.body).toBe(403);
-        expect(response.json().data).toMatchObject({
-          domain_code: 'project_creator_removal_forbidden',
-        });
-      }
+      const bySelf = await removeMember(creator.cookie, project.id, creator.memberId);
+      expect(bySelf.statusCode, bySelf.body).toBe(200);
+      expect((await call(creator.cookie, 'GET', `/projects/${project.id}`)).statusCode).toBe(404);
     });
 
     it('el creador agrega miembros aunque su rol ya no tenga la capacidad', async () => {
