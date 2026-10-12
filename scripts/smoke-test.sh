@@ -12,7 +12,8 @@
 #      sobre http, el navegador no las devolvería y este paso fallaría).
 #   4. Organización de humo fija: si existe la reutiliza, si no la crea. El
 #      hook de ADR-013 tiene que haberle dejado el sitio por defecto.
-#   5. Un script operativo (ensure-default-sites) corre dentro del contenedor.
+#   5. Un script operativo (ensure-default-sites) corre dentro del contenedor,
+#      conectado como app_worker (servicio `scripts` de Compose).
 #   6. Proyectos de punta a punta: en la organización de humo, el proyecto de
 #      código fijo SMOKE-001 se crea si no existe, y GET /projects/{id}
 #      devuelve access_level = full para la cuenta de humo. Ejercita la
@@ -146,7 +147,7 @@ sites="$("$compose" exec -T postgres psql -U postgres -d orquestacion -Atc \
 pass "la organización $org_id tiene $sites sitio(s)"
 
 echo "5. Script operativo dentro del contenedor (ensure-default-sites)"
-output="$("$compose" run --rm --no-deps api node dist/src/scripts/ensure-default-sites.js)" \
+output="$("$compose" run --rm --no-deps scripts node dist/src/scripts/ensure-default-sites.js)" \
   || fail "ensure-default-sites terminó con error:\n$output"
 printf '     %s\n' "$output"
 printf '%s' "$output" | grep -q 'Fallidas: 0' || fail "ensure-default-sites reportó fallidas"

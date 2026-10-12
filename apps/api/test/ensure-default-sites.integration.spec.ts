@@ -40,6 +40,8 @@ describe('ensureDefaultSitesForAllOrganizations (integración)', () => {
   let app: NestFastifyApplication;
   let auth: Auth;
   let db: Db;
+  // El script operativo conecta como `app_worker`; el backfill se ejerce con esa identidad.
+  let workerDb: Db;
 
   beforeAll(async () => {
     harness = await startPostgresHarness();
@@ -53,6 +55,7 @@ describe('ensureDefaultSitesForAllOrganizations (integración)', () => {
     });
     auth = app.get<Auth>(AUTH);
     db = app.get<Db>(DB);
+    workerDb = harness.workerDb;
     mountBetterAuth(app, auth);
     await app.init();
   });
@@ -125,12 +128,12 @@ describe('ensureDefaultSitesForAllOrganizations (integración)', () => {
     );
     expect((await sitesOf(org.organizationId, tenant.memberId)).rows).toHaveLength(0);
 
-    const firstRun = await ensureDefaultSitesForAllOrganizations(db);
+    const firstRun = await ensureDefaultSitesForAllOrganizations(workerDb);
     expect(firstRun.failed).toEqual([]);
     expect(firstRun.sitesCreated).toBeGreaterThanOrEqual(1);
     expect((await sitesOf(org.organizationId, tenant.memberId)).rows).toHaveLength(1);
 
-    const secondRun = await ensureDefaultSitesForAllOrganizations(db);
+    const secondRun = await ensureDefaultSitesForAllOrganizations(workerDb);
     expect(secondRun.failed).toEqual([]);
     expect(secondRun.sitesCreated).toBe(0);
     expect((await sitesOf(org.organizationId, tenant.memberId)).rows).toHaveLength(1);
@@ -181,14 +184,14 @@ describe('ensureDefaultSitesForAllOrganizations (integración)', () => {
       );
       expect(await accessRows(org.organizationId, ownerMemberId, manager.memberId)).toEqual([]);
 
-      const firstRun = await ensureDefaultSitesForAllOrganizations(db);
+      const firstRun = await ensureDefaultSitesForAllOrganizations(workerDb);
       expect(firstRun.failed).toEqual([]);
       expect(firstRun.memberAccessGranted).toBeGreaterThanOrEqual(1);
       expect(await accessRows(org.organizationId, ownerMemberId, manager.memberId)).toEqual([
         onlySite,
       ]);
 
-      const secondRun = await ensureDefaultSitesForAllOrganizations(db);
+      const secondRun = await ensureDefaultSitesForAllOrganizations(workerDb);
       expect(secondRun.failed).toEqual([]);
       expect(secondRun.memberAccessGranted).toBe(0);
       expect(await accessRows(org.organizationId, ownerMemberId, manager.memberId)).toEqual([
@@ -214,7 +217,7 @@ describe('ensureDefaultSitesForAllOrganizations (integración)', () => {
         label: 'Operario Sin Elegir',
       });
 
-      const run = await ensureDefaultSitesForAllOrganizations(db);
+      const run = await ensureDefaultSitesForAllOrganizations(workerDb);
 
       expect(run.failed).toEqual([]);
       expect(await accessRows(org.organizationId, ownerMemberId, operator.memberId)).toEqual([]);
@@ -252,7 +255,7 @@ describe('ensureDefaultSitesForAllOrganizations (integración)', () => {
           `),
       );
 
-      const firstRun = await ensureDefaultSitesForAllOrganizations(db);
+      const firstRun = await ensureDefaultSitesForAllOrganizations(workerDb);
       expect(firstRun.failed).toEqual([]);
       expect(firstRun.memberAccessGranted).toBeGreaterThanOrEqual(2);
       expect(await accessRows(org.organizationId, ownerMemberId, ownerMemberId)).toEqual([
@@ -262,7 +265,7 @@ describe('ensureDefaultSitesForAllOrganizations (integración)', () => {
         onlySite,
       ]);
 
-      const secondRun = await ensureDefaultSitesForAllOrganizations(db);
+      const secondRun = await ensureDefaultSitesForAllOrganizations(workerDb);
       expect(secondRun.memberAccessGranted).toBe(0);
     });
   });

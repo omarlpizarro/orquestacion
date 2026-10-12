@@ -59,8 +59,9 @@ export interface EnsureDefaultSitesBatchResult {
  * Asegura entonces dos invariantes: toda organización tiene su sitio, y en las
  * de un solo sitio todo miembro tiene acceso a él.
  *
- * Corre con las credenciales de `app_login`, igual que la aplicación —
- * nunca con las de `app_owner` (regla dura 4): esto no es una migración de
+ * El script (`scripts/ensure-default-sites.ts`) corre con las credenciales de
+ * `app_worker`, como cualquier script o worker, y no con las de `app_login`
+ * (la API) ni las de `app_owner` (regla dura 4): esto no es una migración de
  * esquema, son INSERT/UPDATE comunes sobre tablas con RLS forzada, así que
  * respeta la política de tenant como cualquier otro escritor. Una
  * transacción de tenant por organización (mismo patrón que los workers de
