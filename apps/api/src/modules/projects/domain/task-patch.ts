@@ -38,6 +38,16 @@ export function isTaskFrozenForEdit(status: string): boolean {
   return FROZEN_FOR_EDIT.includes(status);
 }
 
+/**
+ * El fin planificado no puede ser anterior al inicio (`task_dates_coherent_check` en
+ * la base). Con una sola de las dos fechas no hay con qué comparar. Fechas como
+ * instantes UTC.
+ */
+export function plannedDatesAreCoherent(start: string | null, end: string | null): boolean {
+  if (start === null || end === null) return true;
+  return Date.parse(end) >= Date.parse(start);
+}
+
 const sameInstant = (a: string | null, b: string | null): boolean =>
   a === b || (a !== null && b !== null && Date.parse(a) === Date.parse(b));
 
@@ -80,8 +90,7 @@ export function diffTaskPatch(current: EditableTaskFields, patch: TaskPatch): Ta
   const start = 'plannedStartAt' in changes ? changes.plannedStartAt : current.plannedStartAt;
   const end = 'plannedEndAt' in changes ? changes.plannedEndAt : current.plannedEndAt;
   const datesChange = 'plannedStartAt' in changes || 'plannedEndAt' in changes;
-  const datesIncoherent =
-    datesChange && start != null && end != null && Date.parse(end) < Date.parse(start);
+  const datesIncoherent = datesChange && !plannedDatesAreCoherent(start ?? null, end ?? null);
 
   return {
     changes,
