@@ -55,18 +55,27 @@ describe('decideMemberRemoval', () => {
     ).toBe('allowed');
   });
 
-  it('al creador no lo quita otro miembro, ni él mismo si no tiene la capacidad de rol', () => {
+  it('al creador no lo quita otro miembro, aunque pueda manejar el proyecto', () => {
     expect(decideMemberRemoval({ ...base, targetMemberId: 'creator' })).toBe(
       'creator_removal_forbidden',
     );
-    expect(
-      decideMemberRemoval({
-        ...base,
-        targetMemberId: 'creator',
-        actorMemberId: 'creator',
-        isCreator: true,
-      }),
-    ).toBe('creator_removal_forbidden');
+    expect(decideMemberRemoval({ ...base, targetMemberId: 'creator', isCreator: false })).toBe(
+      'creator_removal_forbidden',
+    );
+  });
+
+  it('el creador puede salirse por su cuenta, tenga o no la capacidad de rol', () => {
+    for (const hasRoleCapability of [true, false]) {
+      expect(
+        decideMemberRemoval({
+          ...base,
+          targetMemberId: 'creator',
+          actorMemberId: 'creator',
+          isCreator: true,
+          hasRoleCapability,
+        }),
+      ).toBe('allowed');
+    }
   });
 
   it('un owner que es el creador puede quitarse a sí mismo', () => {

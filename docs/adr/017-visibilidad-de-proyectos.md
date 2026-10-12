@@ -237,8 +237,8 @@ participa no ve la tarea (404). La regla del dominio queda
 ### 8. Quién cambia la visibilidad y quién maneja los miembros
 
 - **Cambian la visibilidad:** el creador (`project.created_by_member_id`), `owner`
-  y `director`. **Agregan y quitan miembros:** los mismos. Cualquier miembro
-  puede salirse a sí mismo. Se puede agregar a cualquier miembro de la
+  y `director`. **Agregan y quitan miembros:** los mismos. Cualquier miembro,
+  el creador incluido, puede salirse a sí mismo. Se puede agregar a cualquier miembro de la
   organización, sin requisito de acceso al sitio.
 - **Un miembro explícito sin acceso al sitio actúa según su rol.** Haberlo
   agregado a un proyecto es una decisión deliberada que pesa más que el sitio. El
@@ -249,9 +249,12 @@ participa no ve la tarea (404). La regla del dominio queda
   quedan tareas asignadas, conserva el nivel "solo asignado". La respuesta
   informa cuántas le quedan para que alguien decida si reasignar. No se
   desasigna en silencio: cambiaría Mi Día y las notificaciones.
-- **Al creador lo quitan solo `owner` o `director`**, y pierde todo salvo lo que
-  le quede por asignación. Pierde también el derecho de cambiar la visibilidad:
-  sin verlo, recibe 404.
+- **Al creador, cuando lo quita otra persona, lo quitan solo `owner` o
+  `director`.** Él mismo puede salirse, como cualquier miembro (la restricción
+  protege al creador de que otro miembro le quite el acceso, no lo ata al
+  proyecto). Quien deja de ser miembro pierde todo salvo lo que le quede por
+  asignación, y con eso el derecho de cambiar la visibilidad: sin verlo, recibe
+  404.
 - Las capacidades (`project:change_visibility`, `project:manage_members`) se
   definen en código; la condición "es el creador" es un dato del proyecto que
   evalúa el handler.

@@ -21,8 +21,9 @@ export const removeProjectMemberOutputSchema = z.object({
 export type RemoveProjectMemberOutput = z.infer<typeof removeProjectMemberOutputSchema>;
 
 /**
- * Quitan los mismos que agregan, y cualquier miembro puede salirse a sí mismo.
- * Al creador lo quitan solo `owner` o `director`.
+ * Quitan los mismos que agregan, y cualquier miembro, el creador incluido,
+ * puede salirse a sí mismo. Cuando lo quita otra persona, al creador lo quitan
+ * solo `owner` o `director`.
  */
 export const removeProjectMemberContract = base
   .route({

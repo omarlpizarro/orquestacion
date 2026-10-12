@@ -1,8 +1,8 @@
 import { DomainError } from '../../../../shared/errors/domain-error.js';
 
 /**
- * ADR-017 §8: al creador lo quitan solo `owner` o `director`, y no puede
- * salirse por su cuenta.
+ * ADR-017 §8: cuando lo quita otra persona, al creador lo quitan solo `owner`
+ * o `director`. Él mismo puede salirse, como cualquier miembro.
  */
 export class ProjectCreatorRemovalForbiddenError extends DomainError {
   readonly code = 'FORBIDDEN';
