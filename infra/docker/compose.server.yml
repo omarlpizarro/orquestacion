@@ -102,5 +102,30 @@ services:
     security_opt: ["no-new-privileges:true"]
     logging: *logging
 
+  # Scripts operativos (`scripts/compose.sh run --rm --no-deps scripts node
+  # dist/src/scripts/<nombre>.js`). Conectan como app_worker, la identidad de los
+  # workers y los scripts (ADR-017 §5), no como app_login. Servicio aparte de la
+  # API a propósito: darle a la API el password de app_worker le permitiría
+  # declararse "sistema" en las policies (`app_is_privileged()` se decide por la
+  # identidad de la conexión), que es justo lo que ese usuario de base impide.
+  # `profiles` la deja fuera de `up`, igual que `migrate`.
+  scripts:
+    image: orquestacion-api:${GIT_COMMIT:?GIT_COMMIT lo fija scripts/compose.sh}
+    pull_policy: never
+    profiles: [ops]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DATABASE_WORKER_URL: postgres://app_worker:${APP_WORKER_PASSWORD:?Falta APP_WORKER_PASSWORD en infra/docker/.env}@postgres:5432/orquestacion
+      NODE_OPTIONS: --max-old-space-size=192
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 1
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    logging: *logging
+
 volumes:
   postgres_data:

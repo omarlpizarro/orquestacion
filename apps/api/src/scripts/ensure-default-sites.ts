@@ -1,4 +1,4 @@
-import { loadServerEnv } from '@orq/config';
+import { loadWorkerEnv } from '@orq/config';
 import { createDb, createPool } from '@orq/db';
 import { ensureDefaultSitesForAllOrganizations } from '../shared/auth/ensure-default-sites-batch.js';
 
@@ -9,8 +9,14 @@ import { ensureDefaultSitesForAllOrganizations } from '../shared/auth/ensure-def
  * sin pasar por `process.env`/el ciclo de vida del pool.
  */
 async function main() {
-  const env = loadServerEnv();
-  const pool = createPool({ connectionString: env.DATABASE_URL }, 'script:ensure-default-sites');
+  // Los scripts conectan como `app_worker`, no como `app_login` (CLAUDE.md regla
+  // dura 4, ADR-017 §5): `app_login` es la identidad de la API y no hay motivo
+  // para que un script operativo la comparta.
+  const env = loadWorkerEnv();
+  const pool = createPool(
+    { connectionString: env.DATABASE_WORKER_URL },
+    'script:ensure-default-sites',
+  );
   const db = createDb(pool);
 
   try {
