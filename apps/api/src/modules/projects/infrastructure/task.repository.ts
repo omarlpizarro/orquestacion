@@ -300,6 +300,33 @@ export async function updateTaskFields(
   return row ? mapTaskRow(row) : null;
 }
 
+/**
+ * Cambia el responsable de la tarea (`null` la deja sin responsable). `WHERE version =
+ * $esperado` es la concurrencia optimista; `null` si la versión ya no coincide. El
+ * trigger de versión sube `version` y el de audit registra el diff.
+ */
+export async function updateTaskAssignee(
+  tx: Tx,
+  params: {
+    organizationId: string;
+    taskId: string;
+    expectedVersion: number;
+    assigneeMemberId: string | null;
+  },
+): Promise<TaskRow | null> {
+  const result = await tx.execute<TaskRowSql>(sql`
+    update task
+       set assignee_member_id = ${params.assigneeMemberId}
+     where id = ${params.taskId}
+       and organization_id = ${params.organizationId}
+       and version = ${params.expectedVersion}
+       and deleted_at is null
+    returning *, nlevel(path) as depth
+  `);
+  const row = result.rows[0];
+  return row ? mapTaskRow(row) : null;
+}
+
 export interface FindMyDayTaskRowsParams {
   organizationId: string;
   assigneeMemberId: string;

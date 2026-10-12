@@ -57,3 +57,12 @@ describe('hasCapability: task:update', () => {
     expect(hasCapability('operator', { task: ['update'] })).toBe(false);
   });
 });
+
+describe('hasCapability: task:assign', () => {
+  it('owner, director y manager asignan; operator no', () => {
+    expect(hasCapability('owner', { task: ['assign'] })).toBe(true);
+    expect(hasCapability('director', { task: ['assign'] })).toBe(true);
+    expect(hasCapability('manager', { task: ['assign'] })).toBe(true);
+    expect(hasCapability('operator', { task: ['assign'] })).toBe(false);
+  });
+});

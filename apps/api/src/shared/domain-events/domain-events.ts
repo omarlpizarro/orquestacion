@@ -24,6 +24,17 @@ export interface DomainEventMap {
     projectId: string;
     requestId: string;
   };
+  'task.assigned': {
+    taskId: string;
+    organizationId: string;
+    projectId: string;
+    /** `null` si la tarea quedó sin responsable. */
+    assigneeMemberId: string | null;
+    /** `null` si no tenía responsable. */
+    previousAssigneeMemberId: string | null;
+    assignedByMemberId: string;
+    requestId: string;
+  };
   'task.updated': {
     taskId: string;
     organizationId: string;

@@ -16,7 +16,7 @@ export const statement = {
   organization: ['update', 'delete'],
   member: ['create', 'update', 'delete'],
   invitation: ['create', 'cancel'],
-  task: ['create', 'update'],
+  task: ['create', 'update', 'assign'],
   project: ['create', 'change_visibility', 'manage_members'],
   site: ['grant_access'],
 } as const;
@@ -27,7 +27,7 @@ export const ownerRole = accessControl.newRole({
   organization: ['update', 'delete'],
   member: ['create', 'update', 'delete'],
   invitation: ['create', 'cancel'],
-  task: ['create', 'update'],
+  task: ['create', 'update', 'assign'],
   project: ['create', 'change_visibility', 'manage_members'],
   site: ['grant_access'],
 });
@@ -36,7 +36,7 @@ export const directorRole = accessControl.newRole({
   organization: ['update', 'delete'],
   member: ['create', 'update', 'delete'],
   invitation: ['create', 'cancel'],
-  task: ['create', 'update'],
+  task: ['create', 'update', 'assign'],
   project: ['create', 'change_visibility', 'manage_members'],
   site: ['grant_access'],
 });
@@ -51,14 +51,15 @@ export const directorRole = accessControl.newRole({
 export const managerRole = accessControl.newRole({
   member: ['create', 'update'],
   invitation: ['create'],
-  task: ['create', 'update'],
+  task: ['create', 'update', 'assign'],
 });
 
 /**
  * Nivel 3: "sus tareas y su sitio" (CLAUDE.md §7) es actuar sobre lo que ya
  * le asignaron, no crear tareas nuevas — por eso no tiene `task:create`. Tampoco
  * `task:update`: no edita el título, la descripción, la criticidad ni las fechas,
- * ni siquiera de sus propias tareas; cambia el estado y comenta.
+ * ni siquiera de sus propias tareas; cambia el estado y comenta. Tampoco
+ * `task:assign`: no reasigna.
  */
 export const operatorRole = accessControl.newRole({
   member: [],
