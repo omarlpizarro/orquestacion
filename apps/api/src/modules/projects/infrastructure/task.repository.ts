@@ -195,6 +195,69 @@ export async function findTaskById(
   return row ? mapTaskRow(row) : null;
 }
 
+/**
+ * Lectura de una tarea para el endpoint de lectura: sin las borradas. A
+ * diferencia de `findTaskById`, que usan las escrituras. Lo que quien lee no ve
+ * (ADR-017 §1) no llega: lo filtra RLS, no este código.
+ */
+export async function findVisibleTask(
+  tx: Tx,
+  params: { organizationId: string; taskId: string },
+): Promise<TaskRow | null> {
+  const result = await tx.execute<TaskRowSql>(sql`
+    select *, nlevel(path) as depth from task
+    where id = ${params.taskId} and organization_id = ${params.organizationId}
+      and deleted_at is null
+  `);
+  const row = result.rows[0];
+  return row ? mapTaskRow(row) : null;
+}
+
+/**
+ * Las descendientes de una tarea (sin ella), hasta `limit + 1` filas: la fila de
+ * más le dice al llamador que el tope recortó el árbol. Las de menor profundidad
+ * primero, para que un recorte deje el árbol conectado. `path <@` usa el índice
+ * GiST de `task.path`.
+ */
+export async function listTaskDescendants(
+  tx: Tx,
+  params: { organizationId: string; taskId: string; limit: number },
+): Promise<TaskRow[]> {
+  const result = await tx.execute<TaskRowSql>(sql`
+    select t.*, nlevel(t.path) as depth
+      from task t
+     where t.organization_id = ${params.organizationId}
+       and t.deleted_at is null
+       and t.id <> ${params.taskId}
+       and t.path <@ (select root.path from task root
+                       where root.id = ${params.taskId} and root.organization_id = ${params.organizationId})
+     order by nlevel(t.path), t."position" collate "C", t.id
+     limit ${params.limit + 1}
+  `);
+  return result.rows.map(mapTaskRow);
+}
+
+/**
+ * Las tareas de un proyecto que quien lee puede ver, hasta `limit + 1` filas
+ * (ver `listTaskDescendants`). Con acceso "solo asignado" RLS deja únicamente las
+ * asignadas a esa persona.
+ */
+export async function listProjectTasks(
+  tx: Tx,
+  params: { organizationId: string; projectId: string; limit: number },
+): Promise<TaskRow[]> {
+  const result = await tx.execute<TaskRowSql>(sql`
+    select t.*, nlevel(t.path) as depth
+      from task t
+     where t.organization_id = ${params.organizationId}
+       and t.project_id = ${params.projectId}
+       and t.deleted_at is null
+     order by nlevel(t.path), t."position" collate "C", t.id
+     limit ${params.limit + 1}
+  `);
+  return result.rows.map(mapTaskRow);
+}
+
 export interface FindMyDayTaskRowsParams {
   organizationId: string;
   assigneeMemberId: string;
