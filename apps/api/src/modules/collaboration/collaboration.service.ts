@@ -21,14 +21,6 @@ export interface CreateTaskUpdateParams {
   metadata?: Record<string, unknown>;
 }
 
-export interface TaskUpdateRow {
-  id: string;
-  taskId: string;
-  kind: TaskUpdateKind;
-  body: string | null;
-  createdAt: string;
-}
-
 /** Una novedad completa, tal como la lee `projects` para mostrar la bitácora de una tarea. */
 export interface TaskUpdateDetail {
   id: string;
@@ -50,12 +42,17 @@ interface TaskUpdateDetailSql extends Record<string, unknown> {
   created_at: string;
 }
 
-interface TaskUpdateRowSql extends Record<string, unknown> {
-  id: string;
-  task_id: string;
-  kind: TaskUpdateKind;
-  body: string | null;
-  created_at: string;
+function toTaskUpdateDetail(row: TaskUpdateDetailSql): TaskUpdateDetail {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    kind: row.kind,
+    body: row.body,
+    metadata: row.metadata ?? {},
+    createdByMemberId: row.created_by_member_id,
+    // `timestamptz` llega como texto nativo de Postgres (ver `task.repository.ts`).
+    createdAt: new Date(row.created_at).toISOString(),
+  };
 }
 
 /**
@@ -71,8 +68,8 @@ interface TaskUpdateRowSql extends Record<string, unknown> {
  */
 @Injectable()
 export class CollaborationService {
-  async createTaskUpdate(tx: Tx, params: CreateTaskUpdateParams): Promise<TaskUpdateRow> {
-    const result = await tx.execute<TaskUpdateRowSql>(sql`
+  async createTaskUpdate(tx: Tx, params: CreateTaskUpdateParams): Promise<TaskUpdateDetail> {
+    const result = await tx.execute<TaskUpdateDetailSql>(sql`
       insert into task_update (
         id, organization_id, created_by_member_id, task_id, kind, body, metadata
       ) values (
@@ -80,17 +77,31 @@ export class CollaborationService {
         ${params.taskId}, ${params.kind}, ${params.body},
         ${JSON.stringify(params.metadata ?? {})}
       )
-      returning id, task_id, kind, body, created_at
+      returning id, task_id, kind, body, metadata, created_by_member_id, created_at
     `);
     const row = result.rows[0];
     if (!row) throw new Error('createTaskUpdate no devolvió ninguna fila');
-    return {
-      id: row.id,
-      taskId: row.task_id,
-      kind: row.kind,
-      body: row.body,
-      createdAt: row.created_at,
-    };
+    return toTaskUpdateDetail(row);
+  }
+
+  /**
+   * Una novedad por id, con la identidad de quien abrió la transacción: si RLS no se
+   * la deja ver (ADR-017: acceso completo al proyecto, o la tarea asignada) o está
+   * borrada, `null`. Para reconstruir la respuesta de un reintento idempotente.
+   */
+  async findTaskUpdate(
+    tx: Tx,
+    params: { organizationId: string; id: string },
+  ): Promise<TaskUpdateDetail | null> {
+    const result = await tx.execute<TaskUpdateDetailSql>(sql`
+      select id, task_id, kind, body, metadata, created_by_member_id, created_at
+        from task_update
+       where organization_id = ${params.organizationId}
+         and id = ${params.id}
+         and deleted_at is null
+    `);
+    const row = result.rows[0];
+    return row ? toTaskUpdateDetail(row) : null;
   }
 
   /**
@@ -117,16 +128,7 @@ export class CollaborationService {
     const newest = result.rows.slice(0, params.limit).reverse();
     return {
       truncated,
-      updates: newest.map((row) => ({
-        id: row.id,
-        taskId: row.task_id,
-        kind: row.kind,
-        body: row.body,
-        metadata: row.metadata ?? {},
-        createdByMemberId: row.created_by_member_id,
-        // `timestamptz` llega como texto nativo de Postgres (ver `task.repository.ts`).
-        createdAt: new Date(row.created_at).toISOString(),
-      })),
+      updates: newest.map(toTaskUpdateDetail),
     };
   }
 }
