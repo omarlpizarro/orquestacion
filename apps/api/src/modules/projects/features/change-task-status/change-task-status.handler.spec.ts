@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { findPriorMutation, recordMutation } from '../../../../shared/database/mutation-log.js';
+import { claimMutation } from '../../../../shared/database/mutation-log.js';
 import type { TransactionService } from '../../../../shared/database/transaction.service.js';
 import { domainEvents } from '../../../../shared/domain-events/domain-events.js';
 import { runWithRequestContext } from '../../../../shared/request-context/request-context.js';
@@ -20,8 +20,7 @@ import type { ChangeTaskStatusCommand } from './change-task-status.command.js';
 import { ChangeTaskStatusHandler } from './change-task-status.handler.js';
 
 vi.mock('../../../../shared/database/mutation-log.js', () => ({
-  findPriorMutation: vi.fn(),
-  recordMutation: vi.fn(),
+  claimMutation: vi.fn(),
 }));
 vi.mock('../../infrastructure/task.repository.js', () => ({
   findTaskById: vi.fn(),
@@ -89,7 +88,7 @@ function run<T>(command: ChangeTaskStatusCommand, handler: ChangeTaskStatusHandl
 describe('ChangeTaskStatusHandler', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(findPriorMutation).mockResolvedValue(null);
+    vi.mocked(claimMutation).mockResolvedValue({ claimed: true });
     vi.mocked(findTaskById).mockResolvedValue(pendingTask);
     vi.mocked(updateTaskStatus).mockResolvedValue(inProgressTask);
   });
@@ -286,7 +285,6 @@ describe('ChangeTaskStatusHandler', () => {
     expect(hasFullAccess).not.toHaveBeenCalled();
     expect(updateTaskStatus).not.toHaveBeenCalled();
     expect(collaboration.createTaskUpdate).not.toHaveBeenCalled();
-    expect(recordMutation).not.toHaveBeenCalled();
   });
 
   it('un manager solo asignado (sin acceso completo) cambia el estado de SU tarea: el dominio no lo corta por sitio', async () => {
@@ -406,11 +404,34 @@ describe('ChangeTaskStatusHandler', () => {
     domainEvents.removeListener('task.status_changed', spy);
   });
 
+  it('reserva la mutación como primera sentencia, antes de leer la tarea (ADR-007)', async () => {
+    const { handler } = buildHandler();
+
+    await run(baseCommand, handler);
+
+    expect(claimMutation).toHaveBeenCalledWith(
+      {},
+      {
+        clientMutationId: baseCommand.client_mutation_id,
+        organizationId: tenant.organizationId,
+        memberId: tenant.memberId,
+        kind: 'task.change-status',
+        entityId: baseCommand.id,
+      },
+    );
+    const order = (fn: unknown) => vi.mocked(fn as () => void).mock.invocationCallOrder[0] ?? 0;
+    expect(order(claimMutation)).toBeLessThan(order(findTaskById));
+  });
+
   it('reintento con el mismo client_mutation_id no vuelve a aplicar la mutación ni a emitir el evento', async () => {
-    vi.mocked(findPriorMutation).mockResolvedValue({
-      entityId: baseCommand.id,
-      result: 'applied',
-      rejectionReason: null,
+    vi.mocked(claimMutation).mockResolvedValue({
+      claimed: false,
+      prior: {
+        kind: 'task.change-status',
+        entityId: baseCommand.id,
+        result: 'applied',
+        rejectionReason: null,
+      },
     });
     vi.mocked(findTaskById).mockResolvedValue(inProgressTask);
     const { handler, collaboration } = buildHandler();
@@ -422,29 +443,29 @@ describe('ChangeTaskStatusHandler', () => {
     expect(result.status).toBe('in_progress');
     expect(updateTaskStatus).not.toHaveBeenCalled();
     expect(collaboration.createTaskUpdate).not.toHaveBeenCalled();
-    expect(recordMutation).not.toHaveBeenCalled();
     expect(spy).not.toHaveBeenCalled();
     domainEvents.removeListener('task.status_changed', spy);
   });
 
-  it('si el registro de la mutación choca con una violación de unicidad, relee la mutación anterior en vez de romper con un 500 opaco', async () => {
-    const uniqueViolation = Object.assign(
-      new Error('duplicate key value violates unique constraint "mutation_log_pkey"'),
-      { code: '23505' },
-    );
-    vi.mocked(recordMutation).mockRejectedValueOnce(uniqueViolation);
-    vi.mocked(findPriorMutation).mockResolvedValueOnce(null).mockResolvedValueOnce({
-      entityId: baseCommand.id,
-      result: 'applied',
-      rejectionReason: null,
+  it('el pedido duplicado no responde un error de dominio por el estado que dejó el primero', async () => {
+    // Antes de reservar primero, el duplicado leía la tarea ya en `in_progress` y
+    // respondía 422 (transición inválida) o 409 (versión). Ahora no lo evalúa.
+    vi.mocked(claimMutation).mockResolvedValue({
+      claimed: false,
+      prior: {
+        kind: 'task.change-status',
+        entityId: baseCommand.id,
+        result: 'applied',
+        rejectionReason: null,
+      },
     });
-    vi.mocked(findTaskById).mockResolvedValueOnce(pendingTask);
-    vi.mocked(findTaskById).mockResolvedValueOnce(inProgressTask);
+    vi.mocked(findTaskById).mockResolvedValue({ ...inProgressTask, version: 5 });
     const { handler } = buildHandler();
 
-    const result = await run<{ status: string }>(baseCommand, handler);
+    const result = await run<{ status: string; version: number }>(baseCommand, handler);
 
-    expect(result.status).toBe('in_progress');
+    expect(result).toMatchObject({ status: 'in_progress', version: 5 });
+    expect(updateTaskStatus).not.toHaveBeenCalled();
   });
 
   it('lanza si no hay organización activa en el contexto', async () => {

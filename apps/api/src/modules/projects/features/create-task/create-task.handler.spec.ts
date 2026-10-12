@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { findPriorMutation, recordMutation } from '../../../../shared/database/mutation-log.js';
+import { claimMutation } from '../../../../shared/database/mutation-log.js';
 import type { TransactionService } from '../../../../shared/database/transaction.service.js';
 import { domainEvents } from '../../../../shared/domain-events/domain-events.js';
+import { MutationIdReusedError } from '../../../../shared/errors/mutation-id-reused.error.js';
 import { runWithRequestContext } from '../../../../shared/request-context/request-context.js';
 import type { TenancyService } from '../../../tenancy/tenancy.module.js';
 import { AssigneeNotAssignableError } from '../../domain/errors/assignee-not-assignable.error.js';
@@ -10,6 +11,7 @@ import { ProjectNotFoundError } from '../../domain/errors/project-not-found.erro
 import { TaskCreateForbiddenError } from '../../domain/errors/task-create-forbidden.error.js';
 import { TaskCreateProjectAccessError } from '../../domain/errors/task-create-project-access.error.js';
 import { TaskDepthExceededError } from '../../domain/errors/task-depth-exceeded.error.js';
+import { TaskNotFoundError } from '../../domain/errors/task-not-found.error.js';
 import {
   findLastSiblingPosition,
   findParentTaskForTenant,
@@ -23,8 +25,7 @@ import type { CreateTaskCommand } from './create-task.command.js';
 import { CreateTaskHandler } from './create-task.handler.js';
 
 vi.mock('../../../../shared/database/mutation-log.js', () => ({
-  findPriorMutation: vi.fn(),
-  recordMutation: vi.fn(),
+  claimMutation: vi.fn(),
 }));
 vi.mock('../../infrastructure/task.repository.js', () => ({
   findProjectForTenant: vi.fn(),
@@ -101,7 +102,7 @@ function run<T>(command: CreateTaskCommand, handler: CreateTaskHandler): Promise
 describe('CreateTaskHandler', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(findPriorMutation).mockResolvedValue(null);
+    vi.mocked(claimMutation).mockResolvedValue({ claimed: true });
     vi.mocked(findProjectForTenant).mockResolvedValue({ id: baseCommand.project_id, siteId });
     vi.mocked(findLastSiblingPosition).mockResolvedValue(null);
     vi.mocked(insertTask).mockResolvedValue(insertedTask);
@@ -132,22 +133,23 @@ describe('CreateTaskHandler', () => {
     });
   });
 
-  it('registra la mutación como aplicada dentro de la misma transacción', async () => {
+  it('reserva la mutación como primera sentencia, antes de leer nada (ADR-007)', async () => {
     const handler = buildHandler();
 
     await run(baseCommand, handler);
 
-    expect(recordMutation).toHaveBeenCalledWith(
+    expect(claimMutation).toHaveBeenCalledWith(
       {},
       {
         clientMutationId: baseCommand.client_mutation_id,
         organizationId: tenant.organizationId,
         memberId: tenant.memberId,
         kind: 'task.create',
-        entityId: insertedTask.id,
-        result: 'applied',
+        entityId: baseCommand.id,
       },
     );
+    const order = (fn: unknown) => vi.mocked(fn as () => void).mock.invocationCallOrder[0] ?? 0;
+    expect(order(claimMutation)).toBeLessThan(order(findProjectForTenant));
   });
 
   it('emite task.created después de crear la tarea', async () => {
@@ -166,20 +168,45 @@ describe('CreateTaskHandler', () => {
     domainEvents.removeListener('task.created', spy);
   });
 
-  it('reintento con el mismo client_mutation_id no vuelve a insertar', async () => {
-    vi.mocked(findPriorMutation).mockResolvedValue({
-      entityId: insertedTask.id,
-      result: 'applied',
-      rejectionReason: null,
+  it('reintento con el mismo client_mutation_id no vuelve a insertar ni a emitir el evento', async () => {
+    vi.mocked(claimMutation).mockResolvedValue({
+      claimed: false,
+      prior: {
+        kind: 'task.create',
+        entityId: insertedTask.id,
+        result: 'applied',
+        rejectionReason: null,
+      },
     });
     vi.mocked(findTaskById).mockResolvedValue(insertedTask);
     const handler = buildHandler();
+    const spy = vi.fn();
+    domainEvents.onEvent('task.created', spy);
 
     const result = await run<{ id: string }>(baseCommand, handler);
 
     expect(result.id).toBe(insertedTask.id);
     expect(insertTask).not.toHaveBeenCalled();
-    expect(recordMutation).not.toHaveBeenCalled();
+    expect(findProjectForTenant).not.toHaveBeenCalled();
+    expect(spy).not.toHaveBeenCalled();
+    domainEvents.removeListener('task.created', spy);
+  });
+
+  it('si la mutación ya está registrada pero la tarea ya no se ve, responde TaskNotFoundError', async () => {
+    vi.mocked(claimMutation).mockResolvedValue({
+      claimed: false,
+      prior: {
+        kind: 'task.create',
+        entityId: insertedTask.id,
+        result: 'applied',
+        rejectionReason: null,
+      },
+    });
+    vi.mocked(findTaskById).mockResolvedValue(null);
+    const handler = buildHandler();
+
+    await expect(run(baseCommand, handler)).rejects.toBeInstanceOf(TaskNotFoundError);
+    expect(insertTask).not.toHaveBeenCalled();
   });
 
   it('rechaza con ProjectNotFoundError si el proyecto no existe', async () => {
@@ -268,7 +295,6 @@ describe('CreateTaskHandler', () => {
       ),
     ).rejects.toBeInstanceOf(TaskCreateProjectAccessError);
     expect(insertTask).not.toHaveBeenCalled();
-    expect(recordMutation).not.toHaveBeenCalled();
   });
 
   it('orden 404 → 403: un operator que no ve el proyecto recibe 404, no el 403 de su rol', async () => {
@@ -348,37 +374,11 @@ describe('CreateTaskHandler', () => {
     expect(handler.tenancyMock.isMemberAssignable).not.toHaveBeenCalled();
   });
 
-  it('si insertTask choca con una violación de unicidad (dos requests con el mismo client_mutation_id a la vez), relee la mutación anterior en vez de romper con un 500 opaco', async () => {
-    const uniqueViolation = Object.assign(
-      new Error('duplicate key value violates unique constraint "task_pkey"'),
-      { code: '23505' },
-    );
-    vi.mocked(insertTask).mockRejectedValueOnce(uniqueViolation);
-    vi.mocked(findPriorMutation)
-      // primer intento: todavía no ve la mutación que la otra request está por confirmar
-      .mockResolvedValueOnce(null)
-      // segunda pasada, ya en una transacción nueva: la otra request ya commiteó
-      .mockResolvedValueOnce({
-        entityId: insertedTask.id,
-        result: 'applied',
-        rejectionReason: null,
-      });
-    vi.mocked(findTaskById).mockResolvedValue(insertedTask);
+  it('si reservar la mutación falla (id de otra organización), no inserta nada', async () => {
+    vi.mocked(claimMutation).mockRejectedValue(new MutationIdReusedError());
     const handler = buildHandler();
 
-    const result = await run<{ id: string }>(baseCommand, handler);
-
-    expect(result.id).toBe(insertedTask.id);
-  });
-
-  it('si la violación de unicidad no corresponde a ninguna mutación ya resuelta, relanza el error original en vez de disfrazarlo', async () => {
-    const uniqueViolation = Object.assign(new Error('otra restricción unique cualquiera'), {
-      code: '23505',
-    });
-    vi.mocked(insertTask).mockRejectedValueOnce(uniqueViolation);
-    vi.mocked(findPriorMutation).mockResolvedValue(null);
-    const handler = buildHandler();
-
-    await expect(run(baseCommand, handler)).rejects.toBe(uniqueViolation);
+    await expect(run(baseCommand, handler)).rejects.toBeInstanceOf(MutationIdReusedError);
+    expect(insertTask).not.toHaveBeenCalled();
   });
 });

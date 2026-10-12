@@ -3,7 +3,7 @@ import { newId, type ProjectOutput } from '@orq/contracts';
 import type { Tx } from '@orq/db';
 import { hasCapability } from '../../../../shared/auth/access-control.js';
 import { parseSingleOrgRole } from '../../../../shared/auth/org-role.js';
-import { findPriorMutation, recordMutation } from '../../../../shared/database/mutation-log.js';
+import { claimMutation } from '../../../../shared/database/mutation-log.js';
 import {
   hasPostgresErrorCode,
   postgresErrorConstraint,
@@ -77,31 +77,23 @@ export class CreateProjectHandler {
   }
 
   /**
-   * Dos pedidos con el mismo `client_mutation_id` a la vez: ninguno ve la
-   * mutación del otro, los dos insertan, y la PK de `project` (o la de
-   * `mutation_log`) deja pasar a uno. El que pierde no debe recibir un 500: se
-   * reintenta una vez y ahí el `findPriorMutation` encuentra la mutación
-   * aplicada. Si el reintento vuelve a chocar, no era una carrera sino otra cosa:
-   * un código repetido o un `id` reusado con una mutación nueva.
+   * Dos pedidos con el mismo `client_mutation_id` a la vez se serializan en
+   * `claimMutation` (ADR-007): el segundo espera, ve la mutación confirmada y
+   * devuelve el proyecto del primero. No hace falta reintentar.
    *
-   * El código se detecta por la restricción de la base y no con un `SELECT`
-   * previo, porque RLS le esconde a quien crea los proyectos reservados ajenos:
-   * el `SELECT` diría "libre" y el `INSERT` fallaría igual.
+   * Lo que sí puede chocar son otras dos unicidades, y se informan como error de
+   * dominio: el código del proyecto (único por organización) y el `id` (un
+   * cliente que lo reusa con una mutación nueva). El código se detecta por la
+   * restricción de la base y no con un `SELECT` previo, porque RLS le esconde a
+   * quien crea los proyectos reservados ajenos: el `SELECT` diría "libre" y el
+   * `INSERT` fallaría igual.
    */
   private async createOrReplay(
     command: CreateProjectCommand,
     tenant: TenantIdentity,
   ): Promise<CreateOutcome> {
-    const attempt = () =>
-      this.transactions.withTenant((tx) => this.applyMutation(command, tenant, tx));
     try {
-      return await attempt();
-    } catch (error) {
-      if (!hasPostgresErrorCode(error, UNIQUE_VIOLATION)) throw error;
-    }
-
-    try {
-      return await attempt();
+      return await this.transactions.withTenant((tx) => this.applyMutation(command, tenant, tx));
     } catch (error) {
       if (!hasPostgresErrorCode(error, UNIQUE_VIOLATION)) throw error;
       const constraint = postgresErrorConstraint(error);
@@ -118,11 +110,22 @@ export class CreateProjectHandler {
   ): Promise<CreateOutcome> {
     const { organizationId, memberId } = tenant;
 
-    const prior = await findPriorMutation(tx, command.client_mutation_id);
-    if (prior?.result === 'applied' && prior.entityId) {
-      const existing = await findProjectById(tx, { organizationId, projectId: prior.entityId });
+    // Primera sentencia de la transacción: se reserva la mutación antes de leer
+    // nada (ADR-007).
+    const claim = await claimMutation(tx, {
+      clientMutationId: command.client_mutation_id,
+      organizationId,
+      memberId,
+      kind: 'project.create',
+      entityId: command.id,
+    });
+    if (!claim.claimed) {
+      const existing = await findProjectById(tx, {
+        organizationId,
+        projectId: claim.prior.entityId ?? command.id,
+      });
       // Si ya no lo ve (le quitaron el acceso después), no hay respuesta que reconstruir.
-      if (!existing) throw new ProjectNotFoundError(prior.entityId);
+      if (!existing) throw new ProjectNotFoundError(command.id);
       return { project: existing, created: false };
     }
 
@@ -149,15 +152,6 @@ export class CreateProjectHandler {
       createdByMemberId: memberId,
       projectId: command.id,
       memberId,
-    });
-
-    await recordMutation(tx, {
-      clientMutationId: command.client_mutation_id,
-      organizationId,
-      memberId,
-      kind: 'project.create',
-      entityId: command.id,
-      result: 'applied',
     });
 
     const project = await findProjectById(tx, { organizationId, projectId: command.id });

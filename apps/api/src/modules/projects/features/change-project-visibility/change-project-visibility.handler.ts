@@ -2,8 +2,7 @@ import { Injectable } from '@nestjs/common';
 import type { ProjectOutput } from '@orq/contracts';
 import type { Tx } from '@orq/db';
 import { hasCapability } from '../../../../shared/auth/access-control.js';
-import { findPriorMutation, recordMutation } from '../../../../shared/database/mutation-log.js';
-import { retryOnceOnUniqueViolation } from '../../../../shared/database/postgres-errors.js';
+import { claimMutation } from '../../../../shared/database/mutation-log.js';
 import { TransactionService } from '../../../../shared/database/transaction.service.js';
 import {
   getRequestContext,
@@ -31,8 +30,8 @@ export class ChangeProjectVisibilityHandler {
       throw new Error('change-project-visibility requiere una sesión con organización activa.');
     }
 
-    const project = await retryOnceOnUniqueViolation(() =>
-      this.transactions.withTenant((tx) => this.applyMutation(command, tenant, tx)),
+    const project = await this.transactions.withTenant((tx) =>
+      this.applyMutation(command, tenant, tx),
     );
     return toProjectOutput(project);
   }
@@ -45,8 +44,17 @@ export class ChangeProjectVisibilityHandler {
     const { organizationId, memberId } = tenant;
     const target = { organizationId, projectId: command.project_id };
 
-    const prior = await findPriorMutation(tx, command.client_mutation_id);
-    if (prior?.result === 'applied') {
+    // Primera sentencia de la transacción: se reserva la mutación antes de leer
+    // el proyecto (ADR-007). Con el orden viejo, un pedido duplicado leía la
+    // versión ya cambiada por el primero y respondía 409 en vez de su respuesta.
+    const claim = await claimMutation(tx, {
+      clientMutationId: command.client_mutation_id,
+      organizationId,
+      memberId,
+      kind: 'project.change_visibility',
+      entityId: command.project_id,
+    });
+    if (!claim.claimed) {
       const existing = await findProjectById(tx, target);
       if (!existing) throw new ProjectNotFoundError(command.project_id);
       return existing;
@@ -82,15 +90,6 @@ export class ChangeProjectVisibilityHandler {
         throw new ProjectVersionMismatchError(command.project_id, command.expected_version);
       }
     }
-
-    await recordMutation(tx, {
-      clientMutationId: command.client_mutation_id,
-      organizationId,
-      memberId,
-      kind: 'project.change_visibility',
-      entityId: command.project_id,
-      result: 'applied',
-    });
 
     const changed = await findProjectById(tx, target);
     if (!changed) throw new ProjectNotFoundError(command.project_id);

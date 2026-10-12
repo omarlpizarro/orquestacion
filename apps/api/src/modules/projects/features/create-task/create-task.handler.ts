@@ -2,11 +2,7 @@ import { Injectable } from '@nestjs/common';
 import type { TaskOutput } from '@orq/contracts';
 import type { Tx } from '@orq/db';
 import { hasCapability } from '../../../../shared/auth/access-control.js';
-import { findPriorMutation, recordMutation } from '../../../../shared/database/mutation-log.js';
-import {
-  hasPostgresErrorCode,
-  UNIQUE_VIOLATION,
-} from '../../../../shared/database/postgres-errors.js';
+import { claimMutation } from '../../../../shared/database/mutation-log.js';
 import { TransactionService } from '../../../../shared/database/transaction.service.js';
 import { domainEvents } from '../../../../shared/domain-events/domain-events.js';
 import type { TenantIdentity } from '../../../../shared/request-context/request-context.js';
@@ -18,6 +14,7 @@ import { ProjectNotFoundError } from '../../domain/errors/project-not-found.erro
 import { TaskCreateForbiddenError } from '../../domain/errors/task-create-forbidden.error.js';
 import { TaskCreateProjectAccessError } from '../../domain/errors/task-create-project-access.error.js';
 import { TaskDepthExceededError } from '../../domain/errors/task-depth-exceeded.error.js';
+import { TaskNotFoundError } from '../../domain/errors/task-not-found.error.js';
 import { localDatetimeToUtc } from '../../domain/local-datetime-to-utc.js';
 import { exceedsMaxTaskDepth } from '../../domain/max-task-depth.js';
 import { nextTaskPosition } from '../../domain/task-position.js';
@@ -47,65 +44,50 @@ export class CreateTaskHandler {
       throw new Error('create-task requiere una sesión con organización activa.');
     }
 
-    const task = await this.createOrReplayMutation(command, tenant);
+    const { task, created } = await this.transactions.withTenant((tx) =>
+      this.applyMutation(command, tenant, tx),
+    );
 
     // Después del commit, nunca desde dentro del callback: si la
     // transacción hiciera rollback, no hay que avisarle a nadie de algo
-    // que no pasó (ADR-009).
-    domainEvents.emitEvent('task.created', {
-      taskId: task.id,
-      organizationId: tenant.organizationId,
-      projectId: task.projectId,
-      requestId,
-    });
+    // que no pasó (ADR-009). Un reintento idempotente no vuelve a emitir: no hay
+    // efecto nuevo.
+    if (created) {
+      domainEvents.emitEvent('task.created', {
+        taskId: task.id,
+        organizationId: tenant.organizationId,
+        projectId: task.projectId,
+        requestId,
+      });
+    }
 
     return toTaskOutput(task);
-  }
-
-  /**
-   * Dos agujeros de idempotencia si esto fuera una sola pasada: (1)
-   * `mutation_log` dice "aplicada" pero la tarea que apunta ya no está —
-   * seguiríamos de largo e intentaríamos insertar nuevo; (2) dos requests
-   * con el mismo `client_mutation_id` a la vez, ninguno ve la mutación del
-   * otro todavía, los dos intentan insertar. En ambos casos el efecto no
-   * se duplica (la PK de `task`/`mutation_log` lo impide), pero sin este
-   * catch el que pierde la carrera recibía un 500 opaco en vez del mismo
-   * resultado que el que ganó.
-   */
-  private async createOrReplayMutation(
-    command: CreateTaskCommand,
-    tenant: TenantIdentity,
-  ): Promise<TaskRow> {
-    try {
-      return await this.transactions.withTenant((tx) => this.applyMutation(command, tenant, tx));
-    } catch (error) {
-      if (!hasPostgresErrorCode(error, UNIQUE_VIOLATION)) throw error;
-
-      const replayed = await this.transactions.withTenant(async (tx) => {
-        const prior = await findPriorMutation(tx, command.client_mutation_id);
-        if (!prior?.entityId) return null;
-        return findTaskById(tx, { organizationId: tenant.organizationId, taskId: prior.entityId });
-      });
-      // Si no hay mutación previa resuelta, la violación de unicidad era
-      // por otra cosa (o de verdad hay una carrera que este reintento
-      // todavía no ve) — no la disfrazamos, se relanza la original.
-      if (!replayed) throw error;
-      return replayed;
-    }
   }
 
   private async applyMutation(
     command: CreateTaskCommand,
     tenant: TenantIdentity,
     tx: Tx,
-  ): Promise<TaskRow> {
-    const prior = await findPriorMutation(tx, command.client_mutation_id);
-    if (prior?.result === 'applied' && prior.entityId) {
+  ): Promise<{ task: TaskRow; created: boolean }> {
+    // Primera sentencia de la transacción: se reserva la mutación antes de leer
+    // nada (ADR-007). Dos pedidos simultáneos con el mismo `client_mutation_id`
+    // se serializan acá: el segundo espera, ve la mutación confirmada y devuelve
+    // la tarea del primero, sin error ni reintento.
+    const claim = await claimMutation(tx, {
+      clientMutationId: command.client_mutation_id,
+      organizationId: tenant.organizationId,
+      memberId: tenant.memberId,
+      kind: 'task.create',
+      entityId: command.id,
+    });
+    if (!claim.claimed) {
       const existing = await findTaskById(tx, {
         organizationId: tenant.organizationId,
-        taskId: prior.entityId,
+        taskId: claim.prior.entityId ?? command.id,
       });
-      if (existing) return existing;
+      // Si ya no la ve (borrada, o le sacaron el acceso), no hay respuesta que reconstruir.
+      if (!existing) throw new TaskNotFoundError(command.id);
+      return { task: existing, created: false };
     }
 
     const project = await findProjectForTenant(tx, {
@@ -180,16 +162,7 @@ export class CreateTaskHandler {
       position: nextTaskPosition(lastPosition),
     });
 
-    await recordMutation(tx, {
-      clientMutationId: command.client_mutation_id,
-      organizationId: tenant.organizationId,
-      memberId: tenant.memberId,
-      kind: 'task.create',
-      entityId: created.id,
-      result: 'applied',
-    });
-
-    return created;
+    return { task: created, created: true };
   }
 
   /**

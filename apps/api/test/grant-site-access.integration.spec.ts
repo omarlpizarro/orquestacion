@@ -270,6 +270,32 @@ describe('POST /tenancy/sites/:site_id/access (integración)', () => {
       expect(logged.rows).toHaveLength(1);
     });
 
+    it('dos pedidos simultáneos con el mismo client_mutation_id: los dos responden igual y hay un solo efecto', async () => {
+      const second = await newSite(organizationId, ownerMemberId);
+      const operator = await addMemberWithRole(app, auth, {
+        organizationId,
+        role: 'operator',
+        label: 'Operario Simultaneo',
+      });
+      const clientMutationId = newId();
+      const request = () =>
+        grant(ownerCookie, { siteId: second, memberId: operator.memberId, clientMutationId });
+
+      const [first, other] = await Promise.all([request(), request()]);
+
+      expect(first.statusCode, first.body).toBe(200);
+      expect(other.statusCode, other.body).toBe(200);
+      expect(other.json()).toEqual(first.json());
+      const rows = await accessRows(organizationId, ownerMemberId, operator.memberId);
+      expect(rows.filter((row) => row.site_id === second)).toHaveLength(1);
+      const logged = await inOrganization(organizationId, ownerMemberId, (tx) =>
+        tx.execute(sql`
+          select 1 from mutation_log where client_mutation_id = ${clientMutationId}
+        `),
+      );
+      expect(logged.rows).toHaveLength(1);
+    });
+
     it('otorgar un acceso que ya existe, con otro client_mutation_id, no falla ni duplica', async () => {
       const second = await newSite(organizationId, ownerMemberId);
       const operator = await addMemberWithRole(app, auth, {

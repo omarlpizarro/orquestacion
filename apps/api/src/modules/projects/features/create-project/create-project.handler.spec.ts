@@ -1,11 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { findPriorMutation, recordMutation } from '../../../../shared/database/mutation-log.js';
+import {
+  type ClaimMutationResult,
+  claimMutation,
+} from '../../../../shared/database/mutation-log.js';
 import type { TransactionService } from '../../../../shared/database/transaction.service.js';
 import { domainEvents } from '../../../../shared/domain-events/domain-events.js';
 import { runWithRequestContext } from '../../../../shared/request-context/request-context.js';
 import type { TenancyService } from '../../../tenancy/tenancy.module.js';
 import { ProjectCodeTakenError } from '../../domain/errors/project-code-taken.error.js';
 import { ProjectCreateForbiddenError } from '../../domain/errors/project-create-forbidden.error.js';
+import { ProjectIdTakenError } from '../../domain/errors/project-id-taken.error.js';
 import { ProjectSiteAccessForbiddenError } from '../../domain/errors/project-site-access-forbidden.error.js';
 import { ProjectSiteNotFoundError } from '../../domain/errors/project-site-not-found.error.js';
 import { ProjectSiteRequiredError } from '../../domain/errors/project-site-required.error.js';
@@ -19,8 +23,7 @@ import type { CreateProjectCommand } from './create-project.command.js';
 import { CreateProjectHandler } from './create-project.handler.js';
 
 vi.mock('../../../../shared/database/mutation-log.js', () => ({
-  findPriorMutation: vi.fn(),
-  recordMutation: vi.fn(),
+  claimMutation: vi.fn(),
 }));
 vi.mock('../../infrastructure/project.repository.js', () => ({
   findProjectById: vi.fn(),
@@ -81,7 +84,7 @@ function run<T>(role: string, fn: () => Promise<T>): Promise<T> {
 describe('CreateProjectHandler', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(findPriorMutation).mockResolvedValue(null);
+    vi.mocked(claimMutation).mockResolvedValue({ claimed: true });
     vi.mocked(findProjectById).mockResolvedValue(createdProject);
   });
 
@@ -114,14 +117,18 @@ describe('CreateProjectHandler', () => {
     });
   });
 
-  it('inserta el proyecto, enseguida al creador como miembro y recién después el registro de la mutación', async () => {
+  it('reserva la mutación primero, inserta el proyecto y enseguida al creador como miembro', async () => {
     const { handler } = buildHandler();
 
     await run('owner', () => handler.execute(command));
 
     const order = (fn: unknown) => vi.mocked(fn as () => void).mock.invocationCallOrder[0] ?? 0;
     expect(order(insertProject)).toBeLessThan(order(insertProjectMember));
-    expect(order(insertProjectMember)).toBeLessThan(order(recordMutation));
+    expect(order(claimMutation)).toBeLessThan(order(insertProject));
+    expect(claimMutation).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({ kind: 'project.create', entityId: command.id }),
+    );
     expect(insertProjectMember).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
@@ -190,12 +197,18 @@ describe('CreateProjectHandler', () => {
   });
 
   describe('idempotencia', () => {
-    it('un reintento de una mutación aplicada devuelve el proyecto sin insertar nada', async () => {
-      vi.mocked(findPriorMutation).mockResolvedValue({
+    const alreadyApplied: ClaimMutationResult = {
+      claimed: false,
+      prior: {
+        kind: 'project.create',
         entityId: command.id,
         result: 'applied',
         rejectionReason: null,
-      });
+      },
+    };
+
+    it('un reintento de una mutación aplicada devuelve el proyecto sin insertar nada', async () => {
+      vi.mocked(claimMutation).mockResolvedValue(alreadyApplied);
       const { handler } = buildHandler();
 
       const output = await run('owner', () => handler.execute(command));
@@ -203,7 +216,6 @@ describe('CreateProjectHandler', () => {
       expect(output.id).toBe(command.id);
       expect(insertProject).not.toHaveBeenCalled();
       expect(insertProjectMember).not.toHaveBeenCalled();
-      expect(recordMutation).not.toHaveBeenCalled();
     });
 
     it('emite project.created solo cuando crea, no en el reintento', async () => {
@@ -212,11 +224,7 @@ describe('CreateProjectHandler', () => {
       const { handler } = buildHandler();
 
       await run('owner', () => handler.execute(command));
-      vi.mocked(findPriorMutation).mockResolvedValue({
-        entityId: command.id,
-        result: 'applied',
-        rejectionReason: null,
-      });
+      vi.mocked(claimMutation).mockResolvedValue(alreadyApplied);
       await run('owner', () => handler.execute(command));
 
       expect(listener).toHaveBeenCalledTimes(1);
@@ -228,7 +236,7 @@ describe('CreateProjectHandler', () => {
     const uniqueViolation = (constraint: string) =>
       Object.assign(new Error('Failed query'), { cause: { code: '23505', constraint } });
 
-    it('un código repetido se informa como ProjectCodeTakenError tras reintentar una vez', async () => {
+    it('un código repetido se informa como ProjectCodeTakenError, sin reintentar', async () => {
       vi.mocked(insertProject).mockRejectedValue(
         uniqueViolation('project_organization_id_code_unique'),
       );
@@ -237,20 +245,16 @@ describe('CreateProjectHandler', () => {
       await expect(run('owner', () => handler.execute(command))).rejects.toBeInstanceOf(
         ProjectCodeTakenError,
       );
-      expect(withTenant).toHaveBeenCalledTimes(2);
+      expect(withTenant).toHaveBeenCalledTimes(1);
     });
 
-    it('si el primer intento choca pero el reintento encuentra la mutación aplicada, devuelve el proyecto (carrera)', async () => {
-      vi.mocked(insertProject).mockRejectedValueOnce(uniqueViolation('project_pkey'));
-      vi.mocked(findPriorMutation).mockResolvedValueOnce(null).mockResolvedValueOnce({
-        entityId: command.id,
-        result: 'applied',
-        rejectionReason: null,
-      });
+    it('un id reusado con otra mutación se informa como ProjectIdTakenError', async () => {
+      vi.mocked(insertProject).mockRejectedValue(uniqueViolation('project_pkey'));
       const { handler } = buildHandler();
 
-      const output = await run('owner', () => handler.execute(command));
-      expect(output.id).toBe(command.id);
+      await expect(run('owner', () => handler.execute(command))).rejects.toBeInstanceOf(
+        ProjectIdTakenError,
+      );
     });
   });
 });

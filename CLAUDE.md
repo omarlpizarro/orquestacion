@@ -421,7 +421,10 @@ que roles y RLS se adelantaron a fase 1 — es cara de retrofitear (ver
 ADR-007). Toda mutación:
 
 - Acepta un `client_mutation_id` (UUIDv7) y lo registra en `mutation_log`. Un
-  reintento devuelve el resultado anterior en vez de duplicar.
+  reintento devuelve el resultado anterior en vez de duplicar. La mutación se
+  reserva con `claimMutation` como **primera sentencia** de la transacción,
+  antes de leer nada (ADR-007): así dos pedidos simultáneos con el mismo id
+  también devuelven lo mismo.
 - Devuelve un motivo de rechazo legible cuando no se puede aplicar. Si el usuario
   no se entera de que su cambio se descartó, el offline está roto aunque la
   sincronización funcione.
@@ -534,9 +537,13 @@ Confirmar antes de implementar lo que dependa de ellas:
 6. Idempotencia de mutaciones con payload distinto bajo el mismo
    `client_mutation_id`: hoy `mutation_log` no guarda un hash del request, así
    que un reintento con el mismo `client_mutation_id` pero datos distintos
-   devuelve el resultado anterior en silencio, sin avisar del mismatch. Falta
-   decidir si eso alcanza (es la semántica que ADR-007 ya documenta) o si hace
-   falta guardar un hash del payload y rechazar el reintento si no coincide.
+   devuelve el resultado anterior en silencio, sin avisar del mismatch. **Mitigación
+   parcial (ADR-007, actualización del 2026-10-13):** `claimMutation` compara el
+   `kind` y el `entity_id` de lo registrado con los del pedido y rechaza con
+   `client_mutation_id_reused` (409) un id reusado para otra operación u otra
+   entidad. Sigue sin detectarse el mismo `kind` y la misma entidad con datos
+   distintos. Falta decidir si eso alcanza o si hace falta guardar un hash del
+   payload y rechazar el reintento si no coincide.
 7. `task_update.created_by_member_id` para entradas de tipo `system`: la
    columna es `NOT NULL` como en cualquier tabla de negocio, pero un
    `task_update` generado por un proceso automático (reprogramación en

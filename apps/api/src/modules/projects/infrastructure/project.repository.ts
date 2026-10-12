@@ -153,6 +153,12 @@ export async function isActiveProjectMember(
   return result.rows.length > 0;
 }
 
+/**
+ * `ON CONFLICT DO NOTHING` sobre el índice único parcial de miembros activos
+ * (`project_member_org_project_member_active_uidx`): agregar a quien ya es
+ * miembro no es un error ni duplica la fila, también si dos pedidos distintos lo
+ * agregan a la vez.
+ */
 export async function insertProjectMember(
   tx: Tx,
   params: {
@@ -169,6 +175,7 @@ export async function insertProjectMember(
       ${params.id}, ${params.organizationId}, ${params.createdByMemberId},
       ${params.projectId}, ${params.memberId}
     )
+    on conflict (organization_id, project_id, member_id) where deleted_at is null do nothing
   `);
 }
 
