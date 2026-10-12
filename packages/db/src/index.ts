@@ -1,4 +1,4 @@
-export { createDb, createPool, type Db } from './client.js';
+export { attachPoolErrorLogger, createDb, createPool, type Db } from './client.js';
 export { standardColumns } from './columns.js';
 export {
   type TenantContext,

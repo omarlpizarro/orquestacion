@@ -12,7 +12,7 @@ import { buildAuth } from './build-auth.js';
  * contenedor de Nest.
  */
 const env = loadServerEnv();
-const pool = createPool({ connectionString: env.DATABASE_URL });
+const pool = createPool({ connectionString: env.DATABASE_URL }, 'auth');
 const db = createDb(pool);
 
 export const auth = buildAuth(env, db);

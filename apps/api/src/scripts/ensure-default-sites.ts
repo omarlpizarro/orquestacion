@@ -10,7 +10,7 @@ import { ensureDefaultSitesForAllOrganizations } from '../shared/auth/ensure-def
  */
 async function main() {
   const env = loadServerEnv();
-  const pool = createPool({ connectionString: env.DATABASE_URL });
+  const pool = createPool({ connectionString: env.DATABASE_URL }, 'script:ensure-default-sites');
   const db = createDb(pool);
 
   try {
