@@ -134,6 +134,13 @@
       "when": 1791826575024,
       "tag": "0018_validate_task_update_body_required",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1791827556053,
+      "tag": "0019_audit_task",
+      "breakpoints": true
     }
   ]
 }

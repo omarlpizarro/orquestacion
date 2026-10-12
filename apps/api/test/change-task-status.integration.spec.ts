@@ -147,6 +147,42 @@ describe('PATCH /projects/tasks/:id/status (integración)', () => {
     ]);
   });
 
+  it('un cambio de estado deja su fila en audit_log (audit trail de task, 0019): quién, qué cambió y en qué request', async () => {
+    const task = await createTask({});
+
+    const response = await changeStatus(ownerCookie, task.id, {
+      to_status: 'in_progress',
+      expected_version: task.version,
+    });
+    expect(response.statusCode, response.body).toBe(200);
+
+    const entries = await withTenantTransaction(
+      db,
+      { organizationId, memberId: ownerMemberId, requestId: newId() },
+      (tx) =>
+        tx.execute<{
+          action: string;
+          actor_member_id: string | null;
+          actor_kind: string;
+          project_id: string | null;
+          request_id: string | null;
+          changed: Record<string, unknown>;
+        }>(sql`
+          select action, actor_member_id, actor_kind, project_id, request_id, changed
+            from audit_log where entity_type = 'task' and entity_id = ${task.id} order by id
+        `),
+    );
+    expect(entries.rows.map((entry) => entry.action)).toEqual(['insert', 'update']);
+    const change = entries.rows[1];
+    expect(change).toMatchObject({
+      actor_member_id: ownerMemberId,
+      actor_kind: 'member',
+      project_id: projectId,
+      changed: { status: ['pending', 'in_progress'] },
+    });
+    expect(change?.request_id).toBeTruthy();
+  });
+
   it('responde CONFLICT si expected_version no coincide', async () => {
     const task = await createTask({});
 
