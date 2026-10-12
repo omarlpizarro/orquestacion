@@ -6,6 +6,8 @@ import { changeTaskStatusContract } from './projects/change-task-status.contract
 import { createProjectContract } from './projects/create-project.contract.js';
 import { createTaskContract } from './projects/create-task.contract.js';
 import { getProjectContract } from './projects/get-project.contract.js';
+import { getTaskContract } from './projects/get-task.contract.js';
+import { listProjectTasksContract } from './projects/list-project-tasks.contract.js';
 import { listProjectsContract } from './projects/list-projects.contract.js';
 import { myDayContract } from './projects/my-day.contract.js';
 import { removeProjectMemberContract } from './projects/remove-project-member.contract.js';
@@ -20,6 +22,8 @@ export const contract = populateContractRouterPaths({
     createProject: createProjectContract,
     getProject: getProjectContract,
     listProjects: listProjectsContract,
+    getTask: getTaskContract,
+    listProjectTasks: listProjectTasksContract,
     changeProjectVisibility: changeProjectVisibilityContract,
     addProjectMember: addProjectMemberContract,
     removeProjectMember: removeProjectMemberContract,
@@ -73,6 +77,20 @@ export {
   getProjectInputSchema,
 } from './projects/get-project.contract.js';
 export {
+  type GetTaskInput,
+  type GetTaskOutput,
+  getTaskContract,
+  getTaskInputSchema,
+  getTaskOutputSchema,
+} from './projects/get-task.contract.js';
+export {
+  type ListProjectTasksInput,
+  type ListProjectTasksOutput,
+  listProjectTasksContract,
+  listProjectTasksInputSchema,
+  listProjectTasksOutputSchema,
+} from './projects/list-project-tasks.contract.js';
+export {
   type ListProjectsInput,
   type ListProjectsOutput,
   listProjectsContract,
@@ -97,6 +115,13 @@ export {
   removeProjectMemberInputSchema,
   removeProjectMemberOutputSchema,
 } from './projects/remove-project-member.contract.js';
+export {
+  type TaskTreeNode,
+  type TaskUpdateOutput,
+  taskTreeNodeSchema,
+  taskUpdateKindSchema,
+  taskUpdateOutputSchema,
+} from './projects/task-tree.contract.js';
 export { base, domainErrorData, withClientMutationId } from './shared/base.contract.js';
 export { idSchema, newId } from './shared/id.js';
 export { localDateTimeSchema } from './shared/local-datetime.js';

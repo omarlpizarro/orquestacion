@@ -13,6 +13,10 @@ import { CreateTaskController } from './features/create-task/create-task.control
 import { CreateTaskHandler } from './features/create-task/create-task.handler.js';
 import { GetProjectController } from './features/get-project/get-project.controller.js';
 import { GetProjectHandler } from './features/get-project/get-project.handler.js';
+import { GetTaskController } from './features/get-task/get-task.controller.js';
+import { GetTaskHandler } from './features/get-task/get-task.handler.js';
+import { ListProjectTasksController } from './features/list-project-tasks/list-project-tasks.controller.js';
+import { ListProjectTasksHandler } from './features/list-project-tasks/list-project-tasks.handler.js';
 import { ListProjectsController } from './features/list-projects/list-projects.controller.js';
 import { ListProjectsHandler } from './features/list-projects/list-projects.handler.js';
 import { MyDayController } from './features/my-day/my-day.controller.js';
@@ -27,6 +31,8 @@ import { ProjectAccessService } from './project-access.service.js';
     CreateProjectController,
     GetProjectController,
     ListProjectsController,
+    GetTaskController,
+    ListProjectTasksController,
     ChangeProjectVisibilityController,
     AddProjectMemberController,
     RemoveProjectMemberController,
@@ -38,6 +44,8 @@ import { ProjectAccessService } from './project-access.service.js';
     CreateProjectHandler,
     GetProjectHandler,
     ListProjectsHandler,
+    GetTaskHandler,
+    ListProjectTasksHandler,
     ChangeProjectVisibilityHandler,
     AddProjectMemberHandler,
     RemoveProjectMemberHandler,

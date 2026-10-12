@@ -29,6 +29,27 @@ export interface TaskUpdateRow {
   createdAt: string;
 }
 
+/** Una novedad completa, tal como la lee `projects` para mostrar la bitácora de una tarea. */
+export interface TaskUpdateDetail {
+  id: string;
+  taskId: string;
+  kind: TaskUpdateKind;
+  body: string | null;
+  metadata: Record<string, unknown>;
+  createdByMemberId: string;
+  createdAt: string;
+}
+
+interface TaskUpdateDetailSql extends Record<string, unknown> {
+  id: string;
+  task_id: string;
+  kind: TaskUpdateKind;
+  body: string | null;
+  metadata: Record<string, unknown> | null;
+  created_by_member_id: string;
+  created_at: string;
+}
+
 interface TaskUpdateRowSql extends Record<string, unknown> {
   id: string;
   task_id: string;
@@ -69,6 +90,43 @@ export class CollaborationService {
       kind: row.kind,
       body: row.body,
       createdAt: row.created_at,
+    };
+  }
+
+  /**
+   * Las novedades de una tarea, de la más vieja a la más nueva. Si hay más que
+   * `limit`, quedan las más recientes y `truncated` es `true`. Lo que quien lee no
+   * puede ver (ADR-017: acceso completo al proyecto, o la tarea asignada) lo filtra
+   * RLS; las borradas (`deleted_at`) no salen. Índice
+   * `(organization_id, task_id, created_at DESC)`.
+   */
+  async listTaskUpdates(
+    tx: Tx,
+    params: { organizationId: string; taskId: string; limit: number },
+  ): Promise<{ updates: TaskUpdateDetail[]; truncated: boolean }> {
+    const result = await tx.execute<TaskUpdateDetailSql>(sql`
+      select id, task_id, kind, body, metadata, created_by_member_id, created_at
+        from task_update
+       where organization_id = ${params.organizationId}
+         and task_id = ${params.taskId}
+         and deleted_at is null
+       order by created_at desc, id desc
+       limit ${params.limit + 1}
+    `);
+    const truncated = result.rows.length > params.limit;
+    const newest = result.rows.slice(0, params.limit).reverse();
+    return {
+      truncated,
+      updates: newest.map((row) => ({
+        id: row.id,
+        taskId: row.task_id,
+        kind: row.kind,
+        body: row.body,
+        metadata: row.metadata ?? {},
+        createdByMemberId: row.created_by_member_id,
+        // `timestamptz` llega como texto nativo de Postgres (ver `task.repository.ts`).
+        createdAt: new Date(row.created_at).toISOString(),
+      })),
     };
   }
 }
