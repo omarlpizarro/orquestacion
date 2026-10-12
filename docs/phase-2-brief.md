@@ -84,13 +84,14 @@ Orden del resto de la fase (revisado 2026-09-28, reemplaza cualquier orden impl�
 - **Bloque A, higiene (un PR cada uno):** dotenv fuera de producción (#36), controllers a `rethrowDomainError` (#37), `CHECK` de `task_update.body` `NOT VALID` (#38; su `VALIDATE` en un despliegue posterior), scripts como `app_worker` (#39), y la actualización de este documento.
 - **Bloque B, núcleo, en este orden:**
   1. Audit de `task`: triggers (solo migración).
-  2. Lectura de tareas: `get-task` y `list-project-tasks`, con el árbol de subtareas y las novedades.
-  3. Comentarios: `add-task-comment`, un `task_update` de tipo `comment`, **solo texto** (sin adjuntos).
+  2. Lectura de tareas: `get-task` y `list-project-tasks`, con el árbol de subtareas y las novedades. **Hecho (#44).**
+  3. Comentarios: `add-task-comment`, un `task_update` de tipo `comment`, **solo texto** (sin adjuntos). **Hecho (#45).**
   4. `update-task` (en las fechas planificadas gana el servidor, CLAUDE.md §9).
   5. `assign-task` (reasignar; en asignaciones gana el servidor). Acá se resuelve también qué pasa con las tareas asignadas al revocar un acceso a sitio.
   6. `delete-task` (`deleted_at` sobre el subárbol).
   7. Audit, parte 2: job de particiones con pg-boss (suma el `worker` a `compose.server.yml`, un `EXECUTE` para `app_worker` en `ensure-roles.sql` y el ADR de retención).
   8. Notificaciones, parte 1: tabla `notification`, creación en la app a partir de los eventos de dominio, listado y marcar como leída.
+- **Pendiente para los clientes (dashboard y móvil): nombres de miembros en lote.** Las novedades (y el resto de las respuestas que traen un miembro) devuelven `created_by_member_id` / `assignee_member_id` sin el nombre. La interfaz tiene que resolver nombres **en lote** —una consulta por pantalla con los ids distintos que aparecen, no una por novedad—; hoy no existe un endpoint de miembros que lo haga, y hay que agregarlo (con la visibilidad que corresponda: nombres de miembros de la propia organización) antes de la primera pantalla que muestre novedades o responsables.
 - **Bloque C, clientes (entre sí pueden ir en paralelo):** dashboard web (empieza por `packages/ui-tokens` y el shell con login), app móvil (solo en línea; lo offline es la fase 4) y la entrega por push (notificaciones, parte 2), que espera a que exista el móvil.
 
 **Decisiones de notificaciones (2026-10-12):**
