@@ -69,13 +69,14 @@ export const taskUpdate = pgTable(
       sql`${table.kind} in ('comment','status_change','block_report','evidence','system','reopen')`,
     ),
     // El motivo de bloquear o reabrir y el texto de un comentario son lo único
-    // que tienen esos `kind`: sin `body` no dicen nada. El dominio ya lo exige
+    // que tienen esos `kind`: sin texto real (nulo, vacío o solo espacios) no
+    // dicen nada, igual que el dominio, que recorta y rechaza el vacío. El dominio ya lo exige
     // (`ReasonRequiredError`); esto es la invariante de la base. Se agregó con
     // `NOT VALID` y se valida en un despliegue posterior (CLAUDE.md §6, 0017 y
     // la migración que la sigue).
     check(
       'task_update_body_required_check',
-      sql`${table.kind} not in ('comment','block_report','reopen') or ${table.body} is not null`,
+      sql`${table.kind} not in ('comment','block_report','reopen') or (${table.body} is not null and btrim(${table.body}) <> '')`,
     ),
   ],
 );

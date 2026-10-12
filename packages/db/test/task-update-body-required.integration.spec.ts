@@ -10,7 +10,7 @@ import { type Tx, withTenantTransaction } from '../src/transaction.js';
  * reporte de bloqueo y reapertura exigen `body`. Rige para toda fila nueva
  * aunque todavía no se haya validado el historial.
  */
-describe('task_update exige body para comment, block_report y reopen', () => {
+describe('task_update exige texto real para comment, block_report y reopen', () => {
   let harness: PostgresHarness;
   const suffix = randomUUID().replaceAll('-', '');
   const organizationId = `org_${suffix}`;
@@ -57,22 +57,31 @@ describe('task_update exige body para comment, block_report y reopen', () => {
     await harness.stop();
   });
 
-  it.each(['comment', 'block_report', 'reopen'])('rechaza un %s sin body (23514)', async (kind) => {
-    await expect(inTenant((tx) => insertUpdate(tx, kind, null))).rejects.toMatchObject({
-      cause: { code: '23514', constraint: 'task_update_body_required_check' },
+  const withoutText: Array<[string, string | null]> = [
+    ['sin body', null],
+    ["con body ''", ''],
+    ["con body ' ' (solo espacios)", ' '],
+    ["con body '     ' (solo espacios)", '     '],
+  ];
+  const kindsThatNeedText = ['comment', 'block_report', 'reopen'];
+
+  describe.each(kindsThatNeedText)('%s', (kind) => {
+    it.each(withoutText)('se rechaza %s (23514)', async (_label, body) => {
+      await expect(inTenant((tx) => insertUpdate(tx, kind, body))).rejects.toMatchObject({
+        cause: { code: '23514', constraint: 'task_update_body_required_check' },
+      });
+    });
+
+    it('se acepta con texto, también si lleva espacios alrededor', async () => {
+      await expect(
+        inTenant((tx) => insertUpdate(tx, kind, '  Falta el permiso  ')),
+      ).resolves.toBeDefined();
     });
   });
 
-  it.each(['comment', 'block_report', 'reopen'])('acepta un %s con body', async (kind) => {
-    await expect(
-      inTenant((tx) => insertUpdate(tx, kind, 'Falta el permiso')),
-    ).resolves.toBeDefined();
+  describe.each(['status_change', 'evidence', 'system'])('%s: no exige texto', (kind) => {
+    it.each([null, '', ' '])('puede ir con body %j', async (body) => {
+      await expect(inTenant((tx) => insertUpdate(tx, kind, body))).resolves.toBeDefined();
+    });
   });
-
-  it.each(['status_change', 'evidence', 'system'])(
-    'un %s puede ir sin body: no lo exige',
-    async (kind) => {
-      await expect(inTenant((tx) => insertUpdate(tx, kind, null))).resolves.toBeDefined();
-    },
-  );
 });

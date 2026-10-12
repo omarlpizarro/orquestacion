@@ -1,6 +1,8 @@
 -- Invariante de la base: un comentario, un reporte de bloqueo y una reapertura
--- sin texto no dicen nada. El dominio ya lo exige (`ReasonRequiredError`); esto
--- cubre cualquier camino que escriba directo a la tabla.
+-- sin texto real no dicen nada. El dominio ya lo exige (recorta el motivo y
+-- rechaza el vacío, `ReasonRequiredError`); esto cubre cualquier camino que
+-- escriba directo a la tabla, así que exige lo mismo: `body` no nulo y que no
+-- sea vacío ni solo espacios (`btrim`, que recorta espacios).
 --
 -- Va con NOT VALID (CLAUDE.md §6): agregar la constraint es instantáneo y no
 -- mira las filas que ya existen, pero toda fila NUEVA o modificada ya se
@@ -22,4 +24,4 @@
 -- y congelar la tabla para todos; se reintenta después. LOCAL para que no
 -- quede pegado a la conexión de `app_owner`.
 SET LOCAL lock_timeout = '5s';--> statement-breakpoint
-ALTER TABLE "task_update" ADD CONSTRAINT "task_update_body_required_check" CHECK ("task_update"."kind" not in ('comment','block_report','reopen') or "task_update"."body" is not null) NOT VALID;
+ALTER TABLE "task_update" ADD CONSTRAINT "task_update_body_required_check" CHECK ("task_update"."kind" not in ('comment','block_report','reopen') or ("task_update"."body" is not null and btrim("task_update"."body") <> '')) NOT VALID;
