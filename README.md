@@ -222,17 +222,21 @@ imágenes anteriores son justo las que hacen falta para volver.
 
 ### Correr un script operativo
 
-Los scripts se corren en un contenedor efímero de la misma imagen, con el
-mismo entorno y límites que la API, sin publicar puertos:
+Los scripts se corren en un contenedor efímero de la misma imagen, sin
+publicar puertos, en el servicio `scripts` de Compose (perfil `ops`, igual que
+`migrate`):
 
 ```bash
-scripts/compose.sh run --rm --no-deps api node dist/src/scripts/ensure-default-sites.js
+scripts/compose.sh run --rm --no-deps scripts node dist/src/scripts/ensure-default-sites.js
 ```
 
 Es el mecanismo para cualquier script operativo futuro: el JS compilado vive
 en `apps/api/dist/src/scripts/`, y se ejecuta con `node` desde el directorio de
-trabajo de la imagen (`/repo/apps/api`). Corren como `app_login`, nunca como
-`app_owner`.
+trabajo de la imagen (`/repo/apps/api`). Corren como `app_worker` (ADR-017 §5),
+nunca como `app_owner` ni como `app_login`: el servicio `scripts` recibe
+`DATABASE_WORKER_URL` y la API no, porque con el password de `app_worker` la API
+podría declararse "sistema" en las policies. Un script nuevo lee su conexión con
+`loadWorkerEnv()`.
 
 ### Cookies y TLS
 
