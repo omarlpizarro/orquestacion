@@ -1,0 +1,14 @@
+-- Segundo paso de `task_update_body_required_check` (CLAUDE.md §6): la `0017` la
+-- agregó `NOT VALID`; esta la valida contra las filas que ya existían.
+--
+-- Va en una migración aparte y en un despliegue POSTERIOR al de la `0017`, nunca
+-- en la misma corrida del migrador: el migrador de Drizzle envuelve todas las
+-- migraciones pendientes en una sola transacción, y si el `ADD` y el `VALIDATE`
+-- corrieran juntos el lock exclusivo del `ADD` se mantendría mientras `VALIDATE`
+-- revisa la tabla entera.
+--
+-- `VALIDATE CONSTRAINT` toma `SHARE UPDATE EXCLUSIVE`, que no bloquea lecturas ni
+-- escrituras sobre `task_update`. Antes de desplegarla se verificó (consulta de
+-- solo lectura en el servidor) que ninguna fila la rompe; si alguna lo hiciera,
+-- esta migración falla y no cambia nada.
+ALTER TABLE "task_update" VALIDATE CONSTRAINT "task_update_body_required_check";

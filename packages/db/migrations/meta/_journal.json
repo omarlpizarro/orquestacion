@@ -127,6 +127,13 @@
       "when": 1791817111226,
       "tag": "0017_task_update_body_required_not_valid",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1791826575024,
+      "tag": "0018_validate_task_update_body_required",
+      "breakpoints": true
     }
   ]
 }

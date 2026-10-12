@@ -505,7 +505,7 @@ CREATE TABLE task_update (
 
 Columnas estándar (CLAUDE.md §6), como cualquier otra tabla de negocio — esta sección se escribió antes de fijar esa convención y todavía tenía `author_member_id` (nulable) y `client_mutation_id` (`UNIQUE` propio) en vez de `created_by_member_id`/`mutation_log`. Corregido: la idempotencia de crear un `task_update` pasa por `mutation_log`, igual que cualquier otra mutación (ADR-007), sin columna propia. `edited_at` es distinto de `updated_at`: marca cuándo el autor editó el texto de su propia novedad, no cualquier cambio de fila.
 
-`task_update_body_required_check` (migración `0017`, `NOT VALID` hasta su `VALIDATE`): `comment`, `block_report` y `reopen` exigen `body` con texto real (no nulo y con al menos un carácter que no sea espacio en blanco: `body ~ '[^[:space:]]'`); el resto de los `kind` puede ir sin él. El dominio ya lo pedía (recorta y rechaza el vacío); esto es la invariante de la base.
+`task_update_body_required_check` (migración `0017`, agregada `NOT VALID`; validada en la `0018`): `comment`, `block_report` y `reopen` exigen `body` con texto real (no nulo y con al menos un carácter que no sea espacio en blanco: `body ~ '[^[:space:]]'`); el resto de los `kind` puede ir sin él. El dominio ya lo pedía (recorta y rechaza el vacío); esto es la invariante de la base.
 
 `reopen` (migración `0007`) es el `kind` del `task_update` que deja constancia de reabrir una tarea `done` (ADR-012), simétrico a `block_report` para bloquear: en ambos casos el dominio exige un motivo (`resolveTaskStatusTransition`, `ReasonRequiredError`) y `body` lo guarda. El resto de las transiciones de estado que no exigen motivo generan un `task_update` de tipo `status_change` con `body` nulo y `metadata: { from, to }` — un registro legible para la bitácora de la tarea, distinto del que ya deja `audit_log` a nivel de fila.
 
@@ -1014,22 +1014,23 @@ slices siguientes contra una conexión que en los hechos ignora las policies.
 | `0014` | `task_assignee_project_index` | `(organization_id, assignee_member_id, project_id)` parcial `WHERE deleted_at IS NULL`: el acceso "solo asignado" de ADR-017 se deriva de `task` | Hecha |
 | `0015` | `project_visibility_behavior` | ADR-017, PR de comportamiento: las seis funciones auxiliares de RLS (traspasadas a `app_rls_helper` por el puente de `ensure-roles.sql`), `SELECT` del rol auxiliar, policies `RESTRICTIVE` por comando sobre `task`, `project`, `project_member`, `audit_log` y sus particiones y las hijas de una tarea (`app_apply_project_policies()`). Exige haber corrido `ensure-roles.sql` antes (falla con un mensaje claro si no) | Hecha |
 | `0016` | `project_creator_bootstrap` | ADR-017, adenda: `app_full_access_project_ids()` da acceso completo al creador solo durante la transacción que creó el proyecto (`created_by_member_id`, `created_at = transaction_timestamp()`, `version = 1`), para que inserte su fila de `project_member`. Cambio de cuerpo con el puente (`false` / `CREATE OR REPLACE` / `true`); no cambia la lista del puente | Hecha |
-| `0017` | `task_update_body_required_not_valid` | `CHECK (kind NOT IN ('comment','block_report','reopen') OR (body IS NOT NULL AND body ~ '[^[:space:]]'))` sobre `task_update`, agregado `NOT VALID` (CLAUDE.md §6): rige para toda fila nueva. Su `VALIDATE CONSTRAINT` es una migración aparte, en un despliegue posterior | Hecha (falta validar) |
-| `0018` | `templates` | `sop_template`, `sop_template_task` | Pendiente |
-| `0019` | `custom_fields` | `custom_field_definition`, índices GIN | Pendiente |
-| `0020` | `resources` | `resource`, `resource_booking` con la exclusion constraint | Pendiente |
-| `0021` | `dependencies` | `task_dependency`, función anti-ciclos, `schedule_change` | Pendiente |
-| `0022` | `collaboration` (resto) | `attachment`, `task_acknowledgement` | Pendiente |
-| `0023` | `audit` | Resto del audit trail del paso 8: triggers de `task` y demás, job de particiones y retención. `audit_log` y `audit_trigger()` ya existen desde `0012` | Pendiente |
-| `0024` | `notifications` | `notification`, `notification_preference`, `escalation_policy` | Pendiente |
-| `0025` | `sync` | Publicación lógica, `wal_level` (ya no `mutation_log`, adelantada a `0004`) | Pendiente |
-| `0026` | `billing` | `plan`, `subscription`, `payment_event`, `usage_counter` | Pendiente |
-| `0027` | `analytics` | `project_kpi` materializada y su job de refresco | Pendiente |
-| `0028` | `seed` | Planes, plantillas SOP por industria, catálogos iniciales | Pendiente |
+| `0017` | `task_update_body_required_not_valid` | `CHECK (kind NOT IN ('comment','block_report','reopen') OR (body IS NOT NULL AND body ~ '[^[:space:]]'))` sobre `task_update`, agregado `NOT VALID` (CLAUDE.md §6): rige para toda fila nueva. Su `VALIDATE CONSTRAINT` es una migración aparte, en un despliegue posterior | Hecha |
+| `0018` | `validate_task_update_body_required` | `VALIDATE CONSTRAINT task_update_body_required_check`: segundo paso de la `0017`, en un despliegue posterior (CLAUDE.md §6). No bloquea lecturas ni escrituras | Hecha |
+| `0019` | `templates` | `sop_template`, `sop_template_task` | Pendiente |
+| `0020` | `custom_fields` | `custom_field_definition`, índices GIN | Pendiente |
+| `0021` | `resources` | `resource`, `resource_booking` con la exclusion constraint | Pendiente |
+| `0022` | `dependencies` | `task_dependency`, función anti-ciclos, `schedule_change` | Pendiente |
+| `0023` | `collaboration` (resto) | `attachment`, `task_acknowledgement` | Pendiente |
+| `0024` | `audit` | Resto del audit trail del paso 8: triggers de `task` y demás, job de particiones y retención. `audit_log` y `audit_trigger()` ya existen desde `0012` | Pendiente |
+| `0025` | `notifications` | `notification`, `notification_preference`, `escalation_policy` | Pendiente |
+| `0026` | `sync` | Publicación lógica, `wal_level` (ya no `mutation_log`, adelantada a `0004`) | Pendiente |
+| `0027` | `billing` | `plan`, `subscription`, `payment_event`, `usage_counter` | Pendiente |
+| `0028` | `analytics` | `project_kpi` materializada y su job de refresco | Pendiente |
+| `0029` | `seed` | Planes, plantillas SOP por industria, catálogos iniciales | Pendiente |
 
 `0009`/`0010` (site_id obligatorio, ADR-013) no estaban en el plan original — se adelantan por la misma razón que `mutation_log` y `task_update`: el alcance por sitio, que sigue en fase 2, necesita la columna cerrada primero. Corrieron ellas dos en el lugar de `templates`/`custom_fields`, que se corren un lugar cada una. `0016` (adenda del ADR-017) y `0017` (el `CHECK` de `body`) corren una cada una. Desde acá los números de las pendientes son orientativos: el número real lo da el orden en que se mergean.
 
-`0000` a `0020` son la v1. `0021` a `0026` acompañan las fases posteriores, pero conviene escribirlas al mismo tiempo para que el esquema quede coherente de entrada.
+`0000` a `0021` son la v1. `0022` a `0027` acompañan las fases posteriores, pero conviene escribirlas al mismo tiempo para que el esquema quede coherente de entrada.
 
 Regla de operación: ninguna migración hace `DROP COLUMN` en el mismo despliegue que deja de usarla. Primero se deja de escribir, se despliega, se verifica, y recién en un despliegue posterior se borra. Con clientes en el campo que corren versiones viejas de la app móvil, esa disciplina es lo que evita cortes. La única excepción hecha hasta ahora es `0011` (ADR-015): una columna que ningún código leyó ni escribió nunca, en una tabla vacía; no sienta precedente para una columna que el código sí usa.
 
