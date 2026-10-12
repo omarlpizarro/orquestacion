@@ -35,7 +35,15 @@ export const taskUpdateKindSchema = z.enum([
   'reopen',
 ]);
 
-/** Una novedad de la tarea (RF-E2): lo que la gente escribe, no el audit trail. */
+/**
+ * Una novedad de la tarea (RF-E2): lo que la gente escribe, no el audit trail.
+ *
+ * **Para el dashboard y el móvil:** trae `created_by_member_id` pero no el nombre de
+ * quien la escribió. La interfaz tiene que resolver nombres de miembros **en lote**
+ * (una consulta por pantalla con los ids distintos que aparecen, no una por novedad);
+ * hoy no existe un endpoint de miembros que lo haga: es un pendiente del bloque de
+ * clientes (docs/phase-2-brief.md).
+ */
 export const taskUpdateOutputSchema = z.object({
   id: idSchema,
   task_id: idSchema,
