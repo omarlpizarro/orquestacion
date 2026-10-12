@@ -41,3 +41,21 @@ export async function hasMemberSiteAccessRow(
   `);
   return result.rows.length > 0;
 }
+
+/**
+ * Hasta dos sitios activos: alcanza para distinguir "ninguno", "uno solo" y "más
+ * de uno" sin traer todos. `site` no tiene `deleted_at`; un sitio desactivado
+ * (`is_active = false`) no se elige por defecto.
+ */
+export async function findActiveSiteIds(
+  tx: Tx,
+  params: { organizationId: string },
+): Promise<string[]> {
+  const result = await tx.execute<{ id: string }>(sql`
+    select id from site
+    where organization_id = ${params.organizationId} and is_active
+    order by id
+    limit 2
+  `);
+  return result.rows.map((row) => row.id);
+}
