@@ -13,11 +13,16 @@
 #   4. Organización de humo fija: si existe la reutiliza, si no la crea. El
 #      hook de ADR-013 tiene que haberle dejado el sitio por defecto.
 #   5. Un script operativo (ensure-default-sites) corre dentro del contenedor.
+#   6. Proyectos de punta a punta: en la organización de humo, el proyecto de
+#      código fijo SMOKE-001 se crea si no existe, y GET /projects/{id}
+#      devuelve access_level = full para la cuenta de humo. Ejercita la
+#      creación (RLS por proyecto, el creador como miembro explícito) y la
+#      lectura con la identidad de producción.
 #
-# Es idempotente: siempre usa el mismo usuario (smoke@orquestacion.test) y la
-# misma organización (slug `smoke`), así que correrla N veces no acumula
-# filas. El password de la cuenta vive en infra/docker/.env como
-# SMOKE_PASSWORD; si falta, la primera corrida lo genera y lo agrega ahí.
+# Es idempotente: siempre usa el mismo usuario (smoke@orquestacion.test), la
+# misma organización (slug `smoke`) y el mismo proyecto (SMOKE-001), así que
+# correrla N veces no acumula filas. El password de la cuenta vive en
+# infra/docker/.env como SMOKE_PASSWORD; si falta, la primera corrida lo genera y lo agrega ahí.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -26,6 +31,7 @@ compose="$repo_root/scripts/compose.sh"
 
 smoke_email="smoke@orquestacion.test"
 smoke_org_slug="smoke"
+smoke_project_code="SMOKE-001"
 
 [ -f "$env_file" ] || { echo "Falta $env_file" >&2; exit 1; }
 set -a
@@ -49,6 +55,17 @@ trap 'rm -rf "$work_dir"' EXIT
 pass() { printf '  ok   %s\n' "$1"; }
 fail() { printf '  FAIL %b\n' "$1" >&2; exit 1; }
 json_field() { grep -o "\"$1\":\"[^\"]*\"" | head -1 | cut -d'"' -f4; }
+
+# UUIDv7 (RFC 9562) para los ids que genera el cliente (regla dura 6 de
+# CLAUDE.md): 48 bits de milisegundos, versión 7, variante 10xx y el resto al azar.
+new_uuidv7() {
+  local ms_hex rand variant
+  ms_hex="$(printf '%012x' "$(date +%s%3N)")"
+  rand="$(openssl rand -hex 10)"
+  variant="$(printf '%x' $((8 + (0x${rand:3:1} & 3))))"
+  printf '%s-%s-7%s-%s%s-%s' \
+    "${ms_hex:0:8}" "${ms_hex:8:4}" "${rand:0:3}" "$variant" "${rand:4:3}" "${rand:7:12}"
+}
 
 # POST JSON con Origin (Better Auth lo exige en pedidos con cookies). Deja
 # los headers en $work_dir/headers, el cuerpo en $work_dir/body y devuelve
@@ -134,6 +151,35 @@ output="$("$compose" run --rm --no-deps api node dist/src/scripts/ensure-default
 printf '     %s\n' "$output"
 printf '%s' "$output" | grep -q 'Fallidas: 0' || fail "ensure-default-sites reportó fallidas"
 pass "ensure-default-sites corrió sin fallidas"
+
+echo "6. Proyecto de humo ($smoke_project_code) y acceso completo"
+# La sesión puede no tener organización activa (la cuenta ya existía y la
+# organización se creó en otra sesión): se fija siempre, es idempotente.
+status="$(post_json /api/auth/organization/set-active "{\"organizationId\":\"$org_id\"}")"
+[ "$status" = "200" ] \
+  || fail "no se pudo activar la organización de humo (HTTP $status): $(cat "$work_dir/body")"
+# La existencia se busca por código, como superusuario (RLS no aplica): por la
+# API un proyecto reservado ajeno no se vería, y no hay que depender de eso
+# para decidir si crear.
+project_id="$("$compose" exec -T postgres psql -U postgres -d orquestacion -Atc \
+  "select id from project where organization_id = '$org_id' and code = '$smoke_project_code' and deleted_at is null")"
+if [ -n "$project_id" ]; then
+  pass "el proyecto $smoke_project_code ya existía"
+else
+  project_id="$(new_uuidv7)"
+  status="$(post_json /projects \
+    "{\"client_mutation_id\":\"$(new_uuidv7)\",\"id\":\"$project_id\",\"code\":\"$smoke_project_code\",\"name\":\"Proyecto de humo\"}")"
+  [ "$status" = "200" ] \
+    || fail "no se pudo crear el proyecto $smoke_project_code (HTTP $status): $(cat "$work_dir/body")"
+  pass "el proyecto $smoke_project_code no existía: creado"
+fi
+project_status="$(curl -sS -o "$work_dir/body" -w '%{http_code}' -b "$jar" "$base/projects/$project_id")"
+[ "$project_status" = "200" ] \
+  || fail "GET /projects/$project_id respondió HTTP $project_status: $(cat "$work_dir/body")"
+access_level="$(json_field access_level < "$work_dir/body" || true)"
+[ "$access_level" = "full" ] \
+  || fail "access_level de la cuenta de humo sobre $smoke_project_code es '${access_level:-<vacío>}', se esperaba 'full': $(cat "$work_dir/body")"
+pass "GET /projects/$project_id: access_level = full"
 
 echo
 echo "Prueba de humo OK."
