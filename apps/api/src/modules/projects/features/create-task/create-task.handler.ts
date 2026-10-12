@@ -28,6 +28,7 @@ import {
 } from '../../infrastructure/task.repository.js';
 import { toTaskOutput } from '../../infrastructure/task-output.mapper.js';
 import { ProjectAccessService } from '../../project-access.service.js';
+import { isAssignableToProject } from '../../project-assignment.js';
 import type { CreateTaskCommand } from './create-task.command.js';
 
 @Injectable()
@@ -110,11 +111,15 @@ export class CreateTaskHandler {
     }
 
     if (command.assignee_member_id) {
-      const assignable = await this.isAssignable(tx, {
-        organizationId: tenant.organizationId,
-        memberId: command.assignee_member_id,
-        project,
-      });
+      const assignable = await isAssignableToProject(
+        { tenancy: this.tenancy, projectAccess: this.projectAccess },
+        tx,
+        {
+          organizationId: tenant.organizationId,
+          memberId: command.assignee_member_id,
+          project,
+        },
+      );
       if (!assignable) throw new AssigneeNotAssignableError(command.assignee_member_id);
     }
 
@@ -163,34 +168,5 @@ export class CreateTaskHandler {
     });
 
     return { task: created, created: true };
-  }
-
-  /**
-   * ADR-017 §8: se le puede asignar a quien existe en la organización y puede
-   * trabajar en el sitio con su propio rol, o es miembro explícito del
-   * proyecto (haberlo agregado es una decisión deliberada que pesa más que el
-   * sitio).
-   */
-  private async isAssignable(
-    tx: Tx,
-    params: { organizationId: string; memberId: string; project: { id: string; siteId: string } },
-  ): Promise<boolean> {
-    const { organizationId, memberId, project } = params;
-    if (
-      await this.tenancy.isMemberAssignable(tx, {
-        organizationId,
-        memberId,
-        siteId: project.siteId,
-      })
-    ) {
-      return true;
-    }
-    return (
-      (await this.projectAccess.isExplicitMember(tx, {
-        organizationId,
-        projectId: project.id,
-        memberId,
-      })) && (await this.tenancy.isMemberInOrganization(tx, { organizationId, memberId }))
-    );
   }
 }

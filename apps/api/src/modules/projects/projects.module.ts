@@ -5,6 +5,8 @@ import { AddProjectMemberController } from './features/add-project-member/add-pr
 import { AddProjectMemberHandler } from './features/add-project-member/add-project-member.handler.js';
 import { AddTaskCommentController } from './features/add-task-comment/add-task-comment.controller.js';
 import { AddTaskCommentHandler } from './features/add-task-comment/add-task-comment.handler.js';
+import { AssignTaskController } from './features/assign-task/assign-task.controller.js';
+import { AssignTaskHandler } from './features/assign-task/assign-task.handler.js';
 import { ChangeProjectVisibilityController } from './features/change-project-visibility/change-project-visibility.controller.js';
 import { ChangeProjectVisibilityHandler } from './features/change-project-visibility/change-project-visibility.handler.js';
 import { ChangeTaskStatusController } from './features/change-task-status/change-task-status.controller.js';
@@ -39,6 +41,7 @@ import { ProjectAccessService } from './project-access.service.js';
     ListProjectTasksController,
     AddTaskCommentController,
     UpdateTaskController,
+    AssignTaskController,
     ChangeProjectVisibilityController,
     AddProjectMemberController,
     RemoveProjectMemberController,
@@ -54,6 +57,7 @@ import { ProjectAccessService } from './project-access.service.js';
     ListProjectTasksHandler,
     AddTaskCommentHandler,
     UpdateTaskHandler,
+    AssignTaskHandler,
     ChangeProjectVisibilityHandler,
     AddProjectMemberHandler,
     RemoveProjectMemberHandler,

@@ -2,6 +2,7 @@ import { populateContractRouterPaths } from '@orpc/contract';
 import { healthContract } from './health/health.contract.js';
 import { addProjectMemberContract } from './projects/add-project-member.contract.js';
 import { addTaskCommentContract } from './projects/add-task-comment.contract.js';
+import { assignTaskContract } from './projects/assign-task.contract.js';
 import { changeProjectVisibilityContract } from './projects/change-project-visibility.contract.js';
 import { changeTaskStatusContract } from './projects/change-task-status.contract.js';
 import { createProjectContract } from './projects/create-project.contract.js';
@@ -27,6 +28,7 @@ export const contract = populateContractRouterPaths({
     getTask: getTaskContract,
     addTaskComment: addTaskCommentContract,
     updateTask: updateTaskContract,
+    assignTask: assignTaskContract,
     listProjectTasks: listProjectTasksContract,
     changeProjectVisibility: changeProjectVisibilityContract,
     addProjectMember: addProjectMemberContract,
@@ -51,6 +53,11 @@ export {
   addTaskCommentContract,
   addTaskCommentInputSchema,
 } from './projects/add-task-comment.contract.js';
+export {
+  type AssignTaskInput,
+  assignTaskContract,
+  assignTaskInputSchema,
+} from './projects/assign-task.contract.js';
 export {
   type ChangeProjectVisibilityInput,
   changeProjectVisibilityContract,
