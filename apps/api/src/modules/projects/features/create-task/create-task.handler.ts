@@ -13,10 +13,12 @@ import { ParentTaskNotFoundError } from '../../domain/errors/parent-task-not-fou
 import { ProjectNotFoundError } from '../../domain/errors/project-not-found.error.js';
 import { TaskCreateForbiddenError } from '../../domain/errors/task-create-forbidden.error.js';
 import { TaskCreateProjectAccessError } from '../../domain/errors/task-create-project-access.error.js';
+import { TaskDatesIncoherentError } from '../../domain/errors/task-dates-incoherent.error.js';
 import { TaskDepthExceededError } from '../../domain/errors/task-depth-exceeded.error.js';
 import { TaskNotFoundError } from '../../domain/errors/task-not-found.error.js';
 import { localDatetimeToUtc } from '../../domain/local-datetime-to-utc.js';
 import { exceedsMaxTaskDepth } from '../../domain/max-task-depth.js';
+import { plannedDatesAreCoherent } from '../../domain/task-patch.js';
 import { nextTaskPosition } from '../../domain/task-position.js';
 import {
   findLastSiblingPosition,
@@ -140,6 +142,18 @@ export class CreateTaskHandler {
       siteId: project.siteId,
     });
 
+    const plannedStartAtUtc = command.planned_start_at
+      ? localDatetimeToUtc(command.planned_start_at, timeZone)
+      : null;
+    const plannedEndAtUtc = command.planned_end_at
+      ? localDatetimeToUtc(command.planned_end_at, timeZone)
+      : null;
+    // La base lo impide con `task_dates_coherent_check`; sin esta validación el pedido
+    // terminaba en un 500 opaco en vez de un motivo que el usuario pueda leer.
+    if (!plannedDatesAreCoherent(plannedStartAtUtc, plannedEndAtUtc)) {
+      throw new TaskDatesIncoherentError();
+    }
+
     const lastPosition = await findLastSiblingPosition(tx, {
       organizationId: tenant.organizationId,
       projectId: command.project_id,
@@ -156,12 +170,8 @@ export class CreateTaskHandler {
       description: command.description ?? null,
       criticality: command.criticality ?? 'normal',
       assigneeMemberId: command.assignee_member_id ?? null,
-      plannedStartAtUtc: command.planned_start_at
-        ? localDatetimeToUtc(command.planned_start_at, timeZone)
-        : null,
-      plannedEndAtUtc: command.planned_end_at
-        ? localDatetimeToUtc(command.planned_end_at, timeZone)
-        : null,
+      plannedStartAtUtc,
+      plannedEndAtUtc,
       isMilestone: command.is_milestone ?? false,
       ackRequired: command.ack_required ?? false,
       position: nextTaskPosition(lastPosition),
