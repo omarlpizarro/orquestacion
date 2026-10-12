@@ -1,0 +1,29 @@
+-- Invariante de la base: un comentario, un reporte de bloqueo y una reapertura
+-- sin texto real no dicen nada. El dominio ya lo exige (recorta el motivo y
+-- rechaza el vacío, `ReasonRequiredError`); esto cubre cualquier camino que
+-- escriba directo a la tabla, así que exige lo mismo: `body` no nulo y con al
+-- menos un carácter que no sea espacio en blanco (`~ '[^[:space:]]'`: espacios,
+-- tabuladores y saltos de línea no cuentan). El `IS NOT NULL` es lo que hace que
+-- un nulo se rechace: `NULL ~ ...` da NULL, y un CHECK deja pasar el NULL.
+--
+-- Va con NOT VALID (CLAUDE.md §6): agregar la constraint es instantáneo y no
+-- mira las filas que ya existen, pero toda fila NUEVA o modificada ya se
+-- valida. El `VALIDATE CONSTRAINT` es una migración aparte, para un despliegue
+-- POSTERIOR a este, nunca en la misma corrida del migrador: el migrador de
+-- Drizzle envuelve todas las migraciones pendientes en una sola transacción, y
+-- si las dos corrieran juntas el lock exclusivo del `ADD` se mantendría
+-- mientras `VALIDATE` revisa la tabla entera.
+--
+-- Cumple "las migraciones solo agregan": el código anterior nunca inserta uno
+-- de estos `kind` sin `body` (change-task-status exige el motivo antes de
+-- escribir), así que sigue funcionando contra el esquema nuevo.
+--
+-- `reopen` está además de los dos `kind` que nombraba el brief: se agregó en
+-- la 0007 y es el simétrico de `block_report` (también exige motivo, ADR-012).
+--
+-- `lock_timeout` con SET LOCAL: si hay una transacción larga abierta sobre
+-- `task_update`, el pedido del lock exclusivo falla rápido en vez de encolarse
+-- y congelar la tabla para todos; se reintenta después. LOCAL para que no
+-- quede pegado a la conexión de `app_owner`.
+SET LOCAL lock_timeout = '5s';--> statement-breakpoint
+ALTER TABLE "task_update" ADD CONSTRAINT "task_update_body_required_check" CHECK ("task_update"."kind" not in ('comment','block_report','reopen') or ("task_update"."body" is not null and "task_update"."body" ~ '[^[:space:]]')) NOT VALID;
