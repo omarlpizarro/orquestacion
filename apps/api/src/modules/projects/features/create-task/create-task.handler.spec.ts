@@ -10,6 +10,7 @@ import { ParentTaskNotFoundError } from '../../domain/errors/parent-task-not-fou
 import { ProjectNotFoundError } from '../../domain/errors/project-not-found.error.js';
 import { TaskCreateForbiddenError } from '../../domain/errors/task-create-forbidden.error.js';
 import { TaskCreateProjectAccessError } from '../../domain/errors/task-create-project-access.error.js';
+import { TaskDatesIncoherentError } from '../../domain/errors/task-dates-incoherent.error.js';
 import { TaskDepthExceededError } from '../../domain/errors/task-depth-exceeded.error.js';
 import { TaskNotFoundError } from '../../domain/errors/task-not-found.error.js';
 import {
@@ -363,6 +364,22 @@ describe('CreateTaskHandler', () => {
     await expect(
       run({ ...baseCommand, assignee_member_id: 'member_ajeno' }, handler),
     ).rejects.toBeInstanceOf(AssigneeNotAssignableError);
+    expect(insertTask).not.toHaveBeenCalled();
+  });
+
+  it('un fin planificado anterior al inicio (en la zona del sitio) es 422 y no inserta', async () => {
+    const handler = buildHandler();
+
+    await expect(
+      run(
+        {
+          ...baseCommand,
+          planned_start_at: '2026-09-29T18:00',
+          planned_end_at: '2026-09-29T08:00',
+        },
+        handler,
+      ),
+    ).rejects.toBeInstanceOf(TaskDatesIncoherentError);
     expect(insertTask).not.toHaveBeenCalled();
   });
 

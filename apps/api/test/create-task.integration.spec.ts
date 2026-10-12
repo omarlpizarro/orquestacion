@@ -175,6 +175,58 @@ describe('POST /projects/tasks (integración)', () => {
     expect(await countTasksWithTitle('Idempotente concurrente')).toBe(1);
   });
 
+  it('un fin planificado anterior al inicio responde 422 task_dates_incoherent (antes era un 500) y no crea nada', async () => {
+    const clientMutationId = newId();
+    const id = newId();
+
+    const response = await post({
+      client_mutation_id: clientMutationId,
+      id,
+      project_id: projectId,
+      title: 'Fechas al revés',
+      planned_start_at: '2026-09-29T18:00',
+      planned_end_at: '2026-09-29T08:00',
+    });
+
+    expect(response.statusCode, response.body).toBe(422);
+    expect(response.json().data).toMatchObject({ domain_code: 'task_dates_incoherent' });
+    expect(await countTasksWithTitle('Fechas al revés')).toBe(0);
+
+    // El rechazo se lleva la reserva de la mutación: corregir el pedido y reenviarlo con el
+    // mismo client_mutation_id anda.
+    const corrected = await post({
+      client_mutation_id: clientMutationId,
+      id,
+      project_id: projectId,
+      title: 'Fechas al revés',
+      planned_start_at: '2026-09-29T08:00',
+      planned_end_at: '2026-09-29T18:00',
+    });
+    expect(corrected.statusCode, corrected.body).toBe(200);
+    expect(await countTasksWithTitle('Fechas al revés')).toBe(1);
+  });
+
+  it('fin igual al inicio y una sola fecha son coherentes', async () => {
+    const same = await post({
+      client_mutation_id: newId(),
+      id: newId(),
+      project_id: projectId,
+      title: 'Fin igual al inicio',
+      planned_start_at: '2026-09-29T08:00',
+      planned_end_at: '2026-09-29T08:00',
+    });
+    const onlyEnd = await post({
+      client_mutation_id: newId(),
+      id: newId(),
+      project_id: projectId,
+      title: 'Solo el fin',
+      planned_end_at: '2026-09-29T08:00',
+    });
+
+    expect(same.statusCode, same.body).toBe(200);
+    expect(onlyEnd.statusCode, onlyEnd.body).toBe(200);
+  });
+
   it('responde NOT_FOUND si el proyecto no existe', async () => {
     const response = await post({
       client_mutation_id: newId(),
