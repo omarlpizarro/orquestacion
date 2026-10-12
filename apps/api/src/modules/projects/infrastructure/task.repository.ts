@@ -1,6 +1,7 @@
 import type { MyDaySection } from '@orq/contracts';
 import type { Tx } from '@orq/db';
-import { sql } from 'drizzle-orm';
+import { type SQL, sql } from 'drizzle-orm';
+import type { EditableTaskFields } from '../domain/task-patch.js';
 
 export interface ProjectRow {
   id: string;
@@ -256,6 +257,47 @@ export async function listProjectTasks(
      limit ${params.limit + 1}
   `);
   return result.rows.map(mapTaskRow);
+}
+
+/**
+ * `UPDATE` parcial de los campos editables (`update-task`): solo las columnas de
+ * `changes`. `WHERE version = $esperado` es la concurrencia optimista; `null` si la
+ * versión ya no coincide (alguien ganó la carrera entre la lectura y este `UPDATE`).
+ * El trigger de versión sube `version` y `updated_at`; el de audit registra el diff.
+ */
+export async function updateTaskFields(
+  tx: Tx,
+  params: {
+    organizationId: string;
+    taskId: string;
+    expectedVersion: number;
+    changes: Partial<EditableTaskFields>;
+  },
+): Promise<TaskRow | null> {
+  const { changes } = params;
+  const assignments: SQL[] = [];
+  if ('title' in changes) assignments.push(sql`title = ${changes.title}`);
+  if ('description' in changes) assignments.push(sql`description = ${changes.description}`);
+  if ('criticality' in changes) assignments.push(sql`criticality = ${changes.criticality}`);
+  if ('plannedStartAt' in changes) {
+    assignments.push(sql`planned_start_at = ${changes.plannedStartAt}`);
+  }
+  if ('plannedEndAt' in changes) assignments.push(sql`planned_end_at = ${changes.plannedEndAt}`);
+  if (assignments.length === 0) {
+    throw new Error('updateTaskFields se llamó sin ningún campo que cambiar.');
+  }
+
+  const result = await tx.execute<TaskRowSql>(sql`
+    update task
+       set ${sql.join(assignments, sql`, `)}
+     where id = ${params.taskId}
+       and organization_id = ${params.organizationId}
+       and version = ${params.expectedVersion}
+       and deleted_at is null
+    returning *, nlevel(path) as depth
+  `);
+  const row = result.rows[0];
+  return row ? mapTaskRow(row) : null;
 }
 
 export interface FindMyDayTaskRowsParams {

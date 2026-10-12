@@ -12,6 +12,7 @@ import { listProjectTasksContract } from './projects/list-project-tasks.contract
 import { listProjectsContract } from './projects/list-projects.contract.js';
 import { myDayContract } from './projects/my-day.contract.js';
 import { removeProjectMemberContract } from './projects/remove-project-member.contract.js';
+import { updateTaskContract } from './projects/update-task.contract.js';
 import { grantSiteAccessContract } from './tenancy/grant-site-access.contract.js';
 
 export const contract = populateContractRouterPaths({
@@ -25,6 +26,7 @@ export const contract = populateContractRouterPaths({
     listProjects: listProjectsContract,
     getTask: getTaskContract,
     addTaskComment: addTaskCommentContract,
+    updateTask: updateTaskContract,
     listProjectTasks: listProjectTasksContract,
     changeProjectVisibility: changeProjectVisibilityContract,
     addProjectMember: addProjectMemberContract,
@@ -129,6 +131,12 @@ export {
   taskUpdateKindSchema,
   taskUpdateOutputSchema,
 } from './projects/task-tree.contract.js';
+export {
+  editableTaskFields,
+  type UpdateTaskInput,
+  updateTaskContract,
+  updateTaskInputSchema,
+} from './projects/update-task.contract.js';
 export { base, domainErrorData, withClientMutationId } from './shared/base.contract.js';
 export { idSchema, newId } from './shared/id.js';
 export { localDateTimeSchema } from './shared/local-datetime.js';

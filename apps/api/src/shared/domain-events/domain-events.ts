@@ -24,6 +24,13 @@ export interface DomainEventMap {
     projectId: string;
     requestId: string;
   };
+  'task.updated': {
+    taskId: string;
+    organizationId: string;
+    projectId: string;
+    changedFields: string[];
+    requestId: string;
+  };
   'task.commented': {
     taskId: string;
     commentId: string;
