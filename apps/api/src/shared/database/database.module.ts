@@ -11,7 +11,7 @@ import { TransactionService } from './transaction.service.js';
     {
       provide: DB_POOL,
       inject: [SERVER_ENV],
-      useFactory: (env: ServerEnv) => createPool({ connectionString: env.DATABASE_URL }),
+      useFactory: (env: ServerEnv) => createPool({ connectionString: env.DATABASE_URL }, 'api'),
     },
     {
       provide: DB,
