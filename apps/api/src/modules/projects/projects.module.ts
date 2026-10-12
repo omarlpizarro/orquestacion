@@ -15,6 +15,8 @@ import { CreateProjectController } from './features/create-project/create-projec
 import { CreateProjectHandler } from './features/create-project/create-project.handler.js';
 import { CreateTaskController } from './features/create-task/create-task.controller.js';
 import { CreateTaskHandler } from './features/create-task/create-task.handler.js';
+import { DeleteTaskController } from './features/delete-task/delete-task.controller.js';
+import { DeleteTaskHandler } from './features/delete-task/delete-task.handler.js';
 import { GetProjectController } from './features/get-project/get-project.controller.js';
 import { GetProjectHandler } from './features/get-project/get-project.handler.js';
 import { GetTaskController } from './features/get-task/get-task.controller.js';
@@ -42,6 +44,7 @@ import { ProjectAccessService } from './project-access.service.js';
     AddTaskCommentController,
     UpdateTaskController,
     AssignTaskController,
+    DeleteTaskController,
     ChangeProjectVisibilityController,
     AddProjectMemberController,
     RemoveProjectMemberController,
@@ -58,6 +61,7 @@ import { ProjectAccessService } from './project-access.service.js';
     AddTaskCommentHandler,
     UpdateTaskHandler,
     AssignTaskHandler,
+    DeleteTaskHandler,
     ChangeProjectVisibilityHandler,
     AddProjectMemberHandler,
     RemoveProjectMemberHandler,

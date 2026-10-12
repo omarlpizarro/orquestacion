@@ -114,6 +114,13 @@ export async function findProjectForTenant(
   return row ? { id: row.id, siteId: row.site_id } : null;
 }
 
+/**
+ * La tarea padre bajo la que se va a crear una subtarea: sin las borradas, y con
+ * `FOR SHARE`. El bloqueo hace esperar a quien crea hasta que termine un `delete-task`
+ * en curso sobre ese árbol (que toma `FOR UPDATE` sobre el subárbol): al reanudar ve el
+ * `deleted_at` y no la encuentra. Sin él podía quedar una subtarea viva colgando de un
+ * padre borrado.
+ */
 export async function findParentTaskForTenant(
   tx: Tx,
   params: { organizationId: string; projectId: string; parentTaskId: string },
@@ -123,6 +130,8 @@ export async function findParentTaskForTenant(
     where id = ${params.parentTaskId}
       and organization_id = ${params.organizationId}
       and project_id = ${params.projectId}
+      and deleted_at is null
+    for share
   `);
   const row = result.rows[0];
   return row ? { id: row.id, depth: row.depth } : null;
@@ -185,12 +194,17 @@ export async function insertTask(tx: Tx, params: InsertTaskParams): Promise<Task
   return mapTaskRow(row);
 }
 
+/**
+ * Una tarea por id, para las escrituras. **Sin las borradas** (`deleted_at`): una tarea
+ * borrada no se cambia, no se comenta ni se le cuelgan subtareas; para quien escribe
+ * es como si no existiera.
+ */
 export async function findTaskById(
   tx: Tx,
   params: { organizationId: string; taskId: string },
 ): Promise<TaskRow | null> {
   const result = await tx.execute<TaskRowSql>(
-    sql`select *, nlevel(path) as depth from task where id = ${params.taskId} and organization_id = ${params.organizationId}`,
+    sql`select *, nlevel(path) as depth from task where id = ${params.taskId} and organization_id = ${params.organizationId} and deleted_at is null`,
   );
   const row = result.rows[0];
   return row ? mapTaskRow(row) : null;
@@ -325,6 +339,78 @@ export async function updateTaskAssignee(
   `);
   const row = result.rows[0];
   return row ? mapTaskRow(row) : null;
+}
+
+/**
+ * Bloquea (`FOR UPDATE`) la tarea y todas sus descendientes vivas, y devuelve su
+ * `version`. Es el primer paso de `delete-task`: mientras dure la transacción nadie
+ * edita, asigna ni cuelga subtareas de ese árbol (ver `findParentTaskForTenant`). Se
+ * ordena por id para que dos borrados que se cruzan tomen los bloqueos en el mismo
+ * orden. `path <@` usa el índice GiST de `task.path`.
+ */
+export async function lockTaskSubtree(
+  tx: Tx,
+  params: { organizationId: string; taskId: string },
+): Promise<Array<{ id: string; version: number }>> {
+  const result = await tx.execute<{ id: string; version: number }>(sql`
+    select t.id, t.version
+      from task t
+     where t.organization_id = ${params.organizationId}
+       and t.deleted_at is null
+       and t.path <@ (select root.path from task root
+                       where root.id = ${params.taskId}
+                         and root.organization_id = ${params.organizationId})
+     order by t.id
+       for update
+  `);
+  return result.rows;
+}
+
+/**
+ * Borra (lógicamente, regla dura 9) la tarea y todas sus descendientes vivas con el
+ * mismo `deleted_at` (`now()` es el de la transacción). Devuelve cuántas y cuándo.
+ */
+export async function softDeleteTaskSubtree(
+  tx: Tx,
+  params: { organizationId: string; taskId: string },
+): Promise<{ count: number; deletedAt: string }> {
+  const result = await tx.execute<{ deleted_at: string }>(sql`
+    update task t
+       set deleted_at = now()
+     where t.organization_id = ${params.organizationId}
+       and t.deleted_at is null
+       and t.path <@ (select root.path from task root
+                       where root.id = ${params.taskId}
+                         and root.organization_id = ${params.organizationId})
+    returning t.deleted_at
+  `);
+  const first = result.rows[0];
+  if (!first) throw new Error('softDeleteTaskSubtree no borró ninguna fila');
+  return { count: result.rows.length, deletedAt: toIso(first.deleted_at) };
+}
+
+/**
+ * Lo que hizo un `delete-task` ya aplicado, para reconstruir la respuesta de un
+ * reintento: cuándo se borró la tarea y cuántas se borraron con ella (las del
+ * subárbol con ese mismo `deleted_at`). `null` si la tarea no está borrada o quien
+ * pregunta no la ve.
+ */
+export async function findDeletedTaskSummary(
+  tx: Tx,
+  params: { organizationId: string; taskId: string },
+): Promise<{ deletedAt: string; count: number } | null> {
+  const result = await tx.execute<{ deleted_at: string | null; count: number }>(sql`
+    select root.deleted_at,
+           (select count(*)::int from task t
+             where t.organization_id = root.organization_id
+               and t.path <@ root.path
+               and t.deleted_at = root.deleted_at) as count
+      from task root
+     where root.id = ${params.taskId} and root.organization_id = ${params.organizationId}
+  `);
+  const row = result.rows[0];
+  if (!row?.deleted_at) return null;
+  return { deletedAt: toIso(row.deleted_at), count: row.count };
 }
 
 export interface FindMyDayTaskRowsParams {
@@ -471,6 +557,7 @@ export async function updateTaskStatus(
     where id = ${params.taskId}
       and organization_id = ${params.organizationId}
       and version = ${params.expectedVersion}
+      and deleted_at is null
     returning *, nlevel(path) as depth
   `);
   const row = result.rows[0];
