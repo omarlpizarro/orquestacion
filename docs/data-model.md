@@ -572,7 +572,7 @@ Cuatro detalles que hacen que esto sea confiable:
 - El trigger solo guarda los campos que cambiaron, no la fila entera. Una tabla de tareas con 20 columnas auditada completa crece varias veces más rápido que el dato en sí.
 - `app.current_member` y `app.request_id` los setea el mismo interceptor que setea el contexto de RLS. Un cambio hecho por un worker de fondo queda con `actor_member_id` nulo y `actor_kind = 'system'`, que es correcto y visible.
 
-Se audita: `project` y `project_member` (desde `0012`); a medida que avance el paso 8, `task`, `resource_booking`, `member_site_access`, `custom_field_definition`, `guest_link`. No se audita `task_update` ni `notification`, que ya son registros de eventos.
+Se audita: `project` y `project_member` (desde `0012`) y `task` (desde `0019`); a medida que avance el paso 8, `resource_booking`, `member_site_access`, `custom_field_definition`, `guest_link`. No se audita `task_update` ni `notification`, que ya son registros de eventos.
 
 ## Notificaciones, acuse y escalamiento
 
@@ -1016,21 +1016,22 @@ slices siguientes contra una conexión que en los hechos ignora las policies.
 | `0016` | `project_creator_bootstrap` | ADR-017, adenda: `app_full_access_project_ids()` da acceso completo al creador solo durante la transacción que creó el proyecto (`created_by_member_id`, `created_at = transaction_timestamp()`, `version = 1`), para que inserte su fila de `project_member`. Cambio de cuerpo con el puente (`false` / `CREATE OR REPLACE` / `true`); no cambia la lista del puente | Hecha |
 | `0017` | `task_update_body_required_not_valid` | `CHECK (kind NOT IN ('comment','block_report','reopen') OR (body IS NOT NULL AND body ~ '[^[:space:]]'))` sobre `task_update`, agregado `NOT VALID` (CLAUDE.md §6): rige para toda fila nueva. Su `VALIDATE CONSTRAINT` es una migración aparte, en un despliegue posterior | Hecha |
 | `0018` | `validate_task_update_body_required` | `VALIDATE CONSTRAINT task_update_body_required_check`: segundo paso de la `0017`, en un despliegue posterior (CLAUDE.md §6). No bloquea lecturas ni escrituras | Hecha |
-| `0019` | `templates` | `sop_template`, `sop_template_task` | Pendiente |
-| `0020` | `custom_fields` | `custom_field_definition`, índices GIN | Pendiente |
-| `0021` | `resources` | `resource`, `resource_booking` con la exclusion constraint | Pendiente |
-| `0022` | `dependencies` | `task_dependency`, función anti-ciclos, `schedule_change` | Pendiente |
-| `0023` | `collaboration` (resto) | `attachment`, `task_acknowledgement` | Pendiente |
-| `0024` | `audit` | Resto del audit trail del paso 8: triggers de `task` y demás, job de particiones y retención. `audit_log` y `audit_trigger()` ya existen desde `0012` | Pendiente |
-| `0025` | `notifications` | `notification`, `notification_preference`, `escalation_policy` | Pendiente |
-| `0026` | `sync` | Publicación lógica, `wal_level` (ya no `mutation_log`, adelantada a `0004`) | Pendiente |
-| `0027` | `billing` | `plan`, `subscription`, `payment_event`, `usage_counter` | Pendiente |
-| `0028` | `analytics` | `project_kpi` materializada y su job de refresco | Pendiente |
-| `0029` | `seed` | Planes, plantillas SOP por industria, catálogos iniciales | Pendiente |
+| `0019` | `audit_task` | Trigger `task_audit` (`AFTER INSERT OR UPDATE OR DELETE`, por fila, `audit_trigger()` de la `0012`) sobre `task`. La entrada lleva el `project_id` de la tarea, así que se lee con acceso completo al proyecto. Solo registra desde acá: las tareas que ya existían no tienen entrada de alta | Hecha |
+| `0020` | `templates` | `sop_template`, `sop_template_task` | Pendiente |
+| `0021` | `custom_fields` | `custom_field_definition`, índices GIN | Pendiente |
+| `0022` | `resources` | `resource`, `resource_booking` con la exclusion constraint | Pendiente |
+| `0023` | `dependencies` | `task_dependency`, función anti-ciclos, `schedule_change` | Pendiente |
+| `0024` | `collaboration` (resto) | `attachment`, `task_acknowledgement` | Pendiente |
+| `0025` | `audit` | Resto del audit trail del paso 8: triggers de las demás tablas (`task` ya está desde la `0019`), job de particiones y retención. `audit_log` y `audit_trigger()` ya existen desde `0012` | Pendiente |
+| `0026` | `notifications` | `notification`, `notification_preference`, `escalation_policy` | Pendiente |
+| `0027` | `sync` | Publicación lógica, `wal_level` (ya no `mutation_log`, adelantada a `0004`) | Pendiente |
+| `0028` | `billing` | `plan`, `subscription`, `payment_event`, `usage_counter` | Pendiente |
+| `0029` | `analytics` | `project_kpi` materializada y su job de refresco | Pendiente |
+| `0030` | `seed` | Planes, plantillas SOP por industria, catálogos iniciales | Pendiente |
 
 `0009`/`0010` (site_id obligatorio, ADR-013) no estaban en el plan original — se adelantan por la misma razón que `mutation_log` y `task_update`: el alcance por sitio, que sigue en fase 2, necesita la columna cerrada primero. Corrieron ellas dos en el lugar de `templates`/`custom_fields`, que se corren un lugar cada una. `0016` (adenda del ADR-017) y `0017` (el `CHECK` de `body`) corren una cada una. Desde acá los números de las pendientes son orientativos: el número real lo da el orden en que se mergean.
 
-`0000` a `0021` son la v1. `0022` a `0027` acompañan las fases posteriores, pero conviene escribirlas al mismo tiempo para que el esquema quede coherente de entrada.
+`0000` a `0022` son la v1. `0023` a `0028` acompañan las fases posteriores, pero conviene escribirlas al mismo tiempo para que el esquema quede coherente de entrada.
 
 Regla de operación: ninguna migración hace `DROP COLUMN` en el mismo despliegue que deja de usarla. Primero se deja de escribir, se despliega, se verifica, y recién en un despliegue posterior se borra. Con clientes en el campo que corren versiones viejas de la app móvil, esa disciplina es lo que evita cortes. La única excepción hecha hasta ahora es `0011` (ADR-015): una columna que ningún código leyó ni escribió nunca, en una tabla vacía; no sienta precedente para una columna que el código sí usa.
 
