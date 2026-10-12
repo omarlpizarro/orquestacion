@@ -25,6 +25,8 @@ import { MyDayController } from './features/my-day/my-day.controller.js';
 import { MyDayHandler } from './features/my-day/my-day.handler.js';
 import { RemoveProjectMemberController } from './features/remove-project-member/remove-project-member.controller.js';
 import { RemoveProjectMemberHandler } from './features/remove-project-member/remove-project-member.handler.js';
+import { UpdateTaskController } from './features/update-task/update-task.controller.js';
+import { UpdateTaskHandler } from './features/update-task/update-task.handler.js';
 import { ProjectAccessService } from './project-access.service.js';
 
 @Module({
@@ -36,6 +38,7 @@ import { ProjectAccessService } from './project-access.service.js';
     GetTaskController,
     ListProjectTasksController,
     AddTaskCommentController,
+    UpdateTaskController,
     ChangeProjectVisibilityController,
     AddProjectMemberController,
     RemoveProjectMemberController,
@@ -50,6 +53,7 @@ import { ProjectAccessService } from './project-access.service.js';
     GetTaskHandler,
     ListProjectTasksHandler,
     AddTaskCommentHandler,
+    UpdateTaskHandler,
     ChangeProjectVisibilityHandler,
     AddProjectMemberHandler,
     RemoveProjectMemberHandler,

@@ -48,3 +48,12 @@ describe('hasCapability: project', () => {
     }
   });
 });
+
+describe('hasCapability: task:update', () => {
+  it('owner, director y manager editan tareas; operator no, ni las suyas', () => {
+    expect(hasCapability('owner', { task: ['update'] })).toBe(true);
+    expect(hasCapability('director', { task: ['update'] })).toBe(true);
+    expect(hasCapability('manager', { task: ['update'] })).toBe(true);
+    expect(hasCapability('operator', { task: ['update'] })).toBe(false);
+  });
+});
