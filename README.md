@@ -77,11 +77,12 @@ API + worker + Postgres en Docker Compose, sobre el servidor Ubuntu compartido. 
 lo que se crea lleva el prefijo `orquestacion` (proyecto de Compose, red,
 volumen, contenedores) y tiene límite de memoria: en ese server corren otros
 proyectos que no hay que tocar. `web` y MinIO no se despliegan todavía (ver
-`docs/phase-2-brief.md`). El `worker` (pg-boss) sí, desde ADR-018: hoy solo
-mantiene las particiones mensuales de `audit_log`. Misma imagen que la API,
+`docs/phase-2-brief.md`). El `worker` (pg-boss) sí, desde ADR-018: mantiene
+las particiones mensuales de `audit_log` (ADR-018) y procesa la bandeja de avisos
+(`notification_outbox`, ADR-019). Misma imagen que la API,
 conecta como `app_worker` y no publica puertos. Para ver que anda:
-`scripts/verify-audit-worker.sh` (solo lectura); la prueba de humo lo chequea
-en su paso 7.
+`scripts/verify-audit-worker.sh` y `scripts/verify-notification-outbox.sh` (solo
+lectura); la prueba de humo los chequea en sus pasos 7 y 8.
 
 | Pieza | Dónde |
 | --- | --- |

@@ -3,6 +3,7 @@ import { createDb, createPool, withoutTenantTransaction } from '@orq/db';
 import { sql } from 'drizzle-orm';
 import { PgBoss } from 'pg-boss';
 import { startAuditMaintenance } from './audit-maintain.js';
+import { startNotificationOutboxLoop } from './notifications-outbox.js';
 
 const QUEUE_HEALTH_PING = 'health.ping';
 
@@ -40,6 +41,21 @@ async function main() {
   console.log('worker escuchando en', QUEUE_HEALTH_PING);
 
   await startAuditMaintenance(boss, db);
+
+  // Bandeja de avisos (ADR-019): se sondea cada pocos segundos; no pasa por pg-boss porque
+  // la API, que es quien la llena, no puede encolar ahí.
+  const stopOutboxLoop = startNotificationOutboxLoop(db);
+  console.log('worker procesando la bandeja de avisos (notification_outbox)');
+
+  // `docker stop` manda SIGTERM: se deja de sondear y de tomar trabajos antes de salir.
+  const shutdown = async (signal: string) => {
+    console.log(`worker: ${signal}, deteniendo.`);
+    stopOutboxLoop();
+    await boss.stop({ graceful: true, close: true });
+    process.exit(0);
+  };
+  process.once('SIGTERM', () => void shutdown('SIGTERM'));
+  process.once('SIGINT', () => void shutdown('SIGINT'));
 }
 
 main().catch((error) => {

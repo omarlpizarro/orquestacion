@@ -19,6 +19,9 @@ export const statement = {
   task: ['create', 'update', 'assign', 'delete'],
   project: ['create', 'change_visibility', 'manage_members'],
   site: ['grant_access'],
+  // Cada miembro ve y marca como leídos SUS avisos (ADR-019). No es una capacidad que separe
+  // roles: los cuatro la tienen; existe para que la regla esté en el mismo mapa que las demás.
+  notification: ['read'],
 } as const;
 
 export const accessControl = createAccessControl(statement);
@@ -30,6 +33,7 @@ export const ownerRole = accessControl.newRole({
   task: ['create', 'update', 'assign', 'delete'],
   project: ['create', 'change_visibility', 'manage_members'],
   site: ['grant_access'],
+  notification: ['read'],
 });
 
 export const directorRole = accessControl.newRole({
@@ -39,6 +43,7 @@ export const directorRole = accessControl.newRole({
   task: ['create', 'update', 'assign', 'delete'],
   project: ['create', 'change_visibility', 'manage_members'],
   site: ['grant_access'],
+  notification: ['read'],
 });
 
 /**
@@ -52,6 +57,7 @@ export const managerRole = accessControl.newRole({
   member: ['create', 'update'],
   invitation: ['create'],
   task: ['create', 'update', 'assign', 'delete'],
+  notification: ['read'],
 });
 
 /**
@@ -65,6 +71,7 @@ export const operatorRole = accessControl.newRole({
   member: [],
   invitation: [],
   task: [],
+  notification: ['read'],
 });
 
 export const organizationRoles = {

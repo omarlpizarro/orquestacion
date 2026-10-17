@@ -24,6 +24,9 @@
 #      menos de 2 meses de particiones por delante, o si `audit_log_default` tiene
 #      filas. Así un worker caído se ve en el despliegue siguiente. El detalle (logs,
 #      últimas corridas) lo muestra scripts/verify-audit-worker.sh.
+#   8. Bandeja de avisos (ADR-019), SOLO LECTURA: falla si hay filas de
+#      `notification_outbox` pendientes hace más de 5 minutos (worker caído o fila que
+#      agotó sus intentos). El detalle lo muestra scripts/verify-notification-outbox.sh.
 #
 # Es idempotente: siempre usa el mismo usuario (smoke@orquestacion.test), la
 # misma organización (slug `smoke`) y el mismo proyecto (SMOKE-001), así que
@@ -224,6 +227,17 @@ default_rows="$(audit_scalar "select count(*) from public.audit_log_default")"
 [ "$default_rows" = "0" ] \
   || fail "audit_log_default tiene $default_rows fila(s): el job no puede crear la partición de ese mes (ADR-018)"
 pass "audit_log_default está vacía"
+
+echo
+echo "8. Bandeja de avisos (solo lectura)"
+# El worker levanta la bandeja cada pocos segundos: una fila pendiente de hace más de 5 minutos
+# es un worker caído o una fila que agotó sus intentos (queda pendiente a propósito).
+stale_outbox="$(audit_scalar "select count(*) from public.notification_outbox
+                               where processed_at is null and deleted_at is null
+                                 and created_at < now() - interval '5 minutes'")"
+[ "$stale_outbox" = "0" ] \
+  || fail "$stale_outbox fila(s) de notification_outbox pendiente(s) hace más de 5 minutos (scripts/verify-notification-outbox.sh)"
+pass "ninguna fila pendiente de la bandeja de avisos lleva más de 5 minutos"
 
 echo
 echo "Prueba de humo OK."

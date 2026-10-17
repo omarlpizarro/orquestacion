@@ -75,3 +75,15 @@ describe('hasCapability: task:delete', () => {
     expect(hasCapability('operator', { task: ['delete'] })).toBe(false);
   });
 });
+
+describe('hasCapability: notification:read', () => {
+  it('los cuatro roles ven sus propios avisos', () => {
+    for (const role of ['owner', 'director', 'manager', 'operator']) {
+      expect(hasCapability(role, { notification: ['read'] }), role).toBe(true);
+    }
+  });
+
+  it('un rol que no existe no los ve', () => {
+    expect(hasCapability('rol_inventado', { notification: ['read'] })).toBe(false);
+  });
+});

@@ -150,7 +150,7 @@ Antes de dar por terminada cualquier tarea: `pnpm check && pnpm test`.
 | `projects` | project, task, task_dependency, schedule_change, sop_template, sop_template_task, custom_field_definition |
 | `scheduling` | resource, resource_booking |
 | `collaboration` | task_update, attachment, task_acknowledgement |
-| `notifications` | notification, notification_preference, escalation_policy |
+| `notifications` | notification, notification_outbox, notification_preference, escalation_policy |
 
 Un módulo **no** importa el esquema Drizzle de otro ni hace join contra sus tablas.
 Para leer datos de otro módulo, usás el servicio que ese módulo exporta. Para

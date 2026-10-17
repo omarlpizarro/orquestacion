@@ -4,6 +4,7 @@ import type { TransactionService } from '../../../../shared/database/transaction
 import { domainEvents } from '../../../../shared/domain-events/domain-events.js';
 import { runWithRequestContext } from '../../../../shared/request-context/request-context.js';
 import type { CollaborationService } from '../../../collaboration/collaboration.module.js';
+import type { NotificationsService } from '../../../notifications/notifications.module.js';
 import { InvalidTaskStatusTransitionError } from '../../domain/errors/invalid-task-status-transition.error.js';
 import { ReasonRequiredError } from '../../domain/errors/reason-required.error.js';
 import { TaskNotFoundError } from '../../domain/errors/task-not-found.error.js';
@@ -71,11 +72,22 @@ function buildHandler(options: { hasFullProjectAccess?: boolean } = {}) {
       createdAt: '2026-09-20T00:00:00.000Z',
     }),
   } as unknown as CollaborationService;
+  const notifications = {
+    notifyTaskAssigned: vi.fn().mockResolvedValue(undefined),
+    notifyTaskBlockedToAssignee: vi.fn().mockResolvedValue(undefined),
+    enqueueTaskBlockedFanout: vi.fn().mockResolvedValue(undefined),
+  };
   const projectAccess = { hasFullAccess } as unknown as ProjectAccessService;
   return {
-    handler: new ChangeTaskStatusHandler(transactions, collaboration, projectAccess),
+    handler: new ChangeTaskStatusHandler(
+      transactions,
+      collaboration,
+      projectAccess,
+      notifications as unknown as NotificationsService,
+    ),
     collaboration,
     hasFullAccess,
+    notifications,
   };
 }
 
@@ -474,5 +486,135 @@ describe('ChangeTaskStatusHandler', () => {
     await expect(
       runWithRequestContext({ requestId: 'req-1' }, () => handler.execute(baseCommand)),
     ).rejects.toThrow(/sesión con organización activa/);
+  });
+  describe('avisos de un bloqueo (ADR-019)', () => {
+    const blockedBy = (role: string, memberId: string) => ({ ...tenant, role, memberId });
+    const blockCommand = {
+      ...baseCommand,
+      to_status: 'blocked' as const,
+      reason: 'Falta el permiso',
+    };
+    const inProgressAssignedTo = (assignee: string | null): TaskRow => ({
+      ...pendingTask,
+      status: 'in_progress',
+      assigneeMemberId: assignee,
+    });
+    const blocked = (assignee: string | null): TaskRow => ({
+      ...pendingTask,
+      status: 'blocked',
+      assigneeMemberId: assignee,
+      version: 2,
+    });
+
+    it('bloquear deja el pedido en la bandeja con el id de la novedad, en la misma transacción', async () => {
+      vi.mocked(findTaskById).mockResolvedValue(inProgressAssignedTo(tenant.memberId));
+      vi.mocked(updateTaskStatus).mockResolvedValue(blocked(tenant.memberId));
+      const { handler, notifications } = buildHandler();
+
+      await run(blockCommand, handler);
+
+      expect(notifications.enqueueTaskBlockedFanout).toHaveBeenCalledWith(
+        {},
+        {
+          organizationId: tenant.organizationId,
+          actorMemberId: tenant.memberId,
+          taskUpdateId: 'update-1',
+        },
+      );
+    });
+
+    it('si quien bloquea es el responsable, no se le avisa a sí mismo directo', async () => {
+      vi.mocked(findTaskById).mockResolvedValue(inProgressAssignedTo(tenant.memberId));
+      vi.mocked(updateTaskStatus).mockResolvedValue(blocked(tenant.memberId));
+      const { handler, notifications } = buildHandler();
+
+      await run(blockCommand, handler);
+
+      expect(notifications.notifyTaskBlockedToAssignee).toHaveBeenCalledTimes(1);
+      expect(notifications.notifyTaskBlockedToAssignee).toHaveBeenCalledWith(
+        {},
+        expect.objectContaining({
+          actorMemberId: tenant.memberId,
+          assigneeMemberId: tenant.memberId,
+        }),
+      );
+    });
+
+    it('si bloquea otra persona, se avisa directo al responsable con el motivo y la novedad', async () => {
+      vi.mocked(findTaskById).mockResolvedValue(inProgressAssignedTo('member_operario'));
+      vi.mocked(updateTaskStatus).mockResolvedValue(blocked('member_operario'));
+      const { handler, notifications } = buildHandler();
+
+      await runWithRequestContext(
+        { requestId: 'req-1', tenant: blockedBy('manager', 'member_gerente') },
+        () => handler.execute(blockCommand),
+      );
+
+      expect(notifications.notifyTaskBlockedToAssignee).toHaveBeenCalledWith(
+        {},
+        {
+          organizationId: tenant.organizationId,
+          actorMemberId: 'member_gerente',
+          assigneeMemberId: 'member_operario',
+          taskId: baseCommand.id,
+          projectId: pendingTask.projectId,
+          taskTitle: pendingTask.title,
+          taskUpdateId: 'update-1',
+          reason: 'Falta el permiso',
+        },
+      );
+      expect(notifications.enqueueTaskBlockedFanout).toHaveBeenCalledTimes(1);
+    });
+
+    it('una tarea sin responsable se bloquea igual: va a la bandeja y no hay aviso directo', async () => {
+      vi.mocked(findTaskById).mockResolvedValue(inProgressAssignedTo(null));
+      vi.mocked(updateTaskStatus).mockResolvedValue(blocked(null));
+      const { handler, notifications } = buildHandler();
+
+      await runWithRequestContext(
+        { requestId: 'req-1', tenant: blockedBy('manager', 'member_gerente') },
+        () => handler.execute(blockCommand),
+      );
+
+      expect(notifications.notifyTaskBlockedToAssignee).not.toHaveBeenCalled();
+      expect(notifications.enqueueTaskBlockedFanout).toHaveBeenCalledTimes(1);
+    });
+
+    it('una transición que no es un bloqueo no avisa ni encola nada', async () => {
+      const { handler, notifications } = buildHandler();
+
+      await run(baseCommand, handler);
+
+      expect(notifications.notifyTaskBlockedToAssignee).not.toHaveBeenCalled();
+      expect(notifications.enqueueTaskBlockedFanout).not.toHaveBeenCalled();
+    });
+
+    it('un reintento (la mutación ya estaba reservada) no encola ni avisa de nuevo', async () => {
+      vi.mocked(claimMutation).mockResolvedValue({
+        claimed: false,
+        prior: {
+          kind: 'task.change-status',
+          entityId: baseCommand.id,
+          result: 'applied',
+          rejectionReason: null,
+        },
+      });
+      vi.mocked(findTaskById).mockResolvedValue(blocked(tenant.memberId));
+      const { handler, notifications } = buildHandler();
+
+      await run(blockCommand, handler);
+
+      expect(notifications.enqueueTaskBlockedFanout).not.toHaveBeenCalled();
+      expect(notifications.notifyTaskBlockedToAssignee).not.toHaveBeenCalled();
+    });
+
+    it('si encolar falla, el error se propaga (la transacción hace rollback con el bloqueo)', async () => {
+      vi.mocked(findTaskById).mockResolvedValue(inProgressAssignedTo(tenant.memberId));
+      vi.mocked(updateTaskStatus).mockResolvedValue(blocked(tenant.memberId));
+      const { handler, notifications } = buildHandler();
+      notifications.enqueueTaskBlockedFanout.mockRejectedValue(new Error('boom'));
+
+      await expect(run(blockCommand, handler)).rejects.toThrow('boom');
+    });
   });
 });

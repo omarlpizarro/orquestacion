@@ -1,5 +1,7 @@
 import { populateContractRouterPaths } from '@orpc/contract';
 import { healthContract } from './health/health.contract.js';
+import { listNotificationsContract } from './notifications/list-notifications.contract.js';
+import { markNotificationReadContract } from './notifications/mark-notification-read.contract.js';
 import { addProjectMemberContract } from './projects/add-project-member.contract.js';
 import { addTaskCommentContract } from './projects/add-task-comment.contract.js';
 import { assignTaskContract } from './projects/assign-task.contract.js';
@@ -22,6 +24,10 @@ export const contract = populateContractRouterPaths({
   tenancy: {
     grantSiteAccess: grantSiteAccessContract,
   },
+  notifications: {
+    listNotifications: listNotificationsContract,
+    markNotificationRead: markNotificationReadContract,
+  },
   projects: {
     createProject: createProjectContract,
     getProject: getProjectContract,
@@ -43,6 +49,32 @@ export const contract = populateContractRouterPaths({
 export type Contract = typeof contract;
 
 export { type HealthOutput, healthContract, healthOutputSchema } from './health/health.contract.js';
+export {
+  DEFAULT_NOTIFICATIONS_PAGE_SIZE,
+  type ListNotificationsInput,
+  type ListNotificationsOutput,
+  listNotificationsContract,
+  listNotificationsInputSchema,
+  listNotificationsOutputSchema,
+  MAX_NOTIFICATIONS_PAGE_SIZE,
+  type NotificationOutput,
+  notificationOutputSchema,
+} from './notifications/list-notifications.contract.js';
+export {
+  type MarkNotificationReadInput,
+  markNotificationReadContract,
+  markNotificationReadInputSchema,
+} from './notifications/mark-notification-read.contract.js';
+export {
+  assignedDedupeKey,
+  blockedDedupeKey,
+  buildReasonPreview,
+  type NotificationPayload,
+  type NotificationTemplateKey,
+  notificationPayloadSchema,
+  notificationTemplateKeySchema,
+  REASON_PREVIEW_MAX_LENGTH,
+} from './notifications/notification-templates.js';
 export {
   type AddProjectMemberInput,
   type AddProjectMemberOutput,

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { CollaborationModule } from '../collaboration/collaboration.module.js';
+import { NotificationsModule } from '../notifications/notifications.module.js';
 import { TenancyModule } from '../tenancy/tenancy.module.js';
 import { AddProjectMemberController } from './features/add-project-member/add-project-member.controller.js';
 import { AddProjectMemberHandler } from './features/add-project-member/add-project-member.handler.js';
@@ -34,7 +35,7 @@ import { UpdateTaskHandler } from './features/update-task/update-task.handler.js
 import { ProjectAccessService } from './project-access.service.js';
 
 @Module({
-  imports: [TenancyModule, CollaborationModule],
+  imports: [TenancyModule, CollaborationModule, NotificationsModule],
   controllers: [
     CreateProjectController,
     GetProjectController,

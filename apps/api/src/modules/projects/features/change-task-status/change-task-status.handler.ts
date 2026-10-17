@@ -11,6 +11,7 @@ import {
   CollaborationService,
   type TaskUpdateKind,
 } from '../../../collaboration/collaboration.module.js';
+import { NotificationsService } from '../../../notifications/notifications.module.js';
 import { TaskNotFoundError } from '../../domain/errors/task-not-found.error.js';
 import { TaskVersionMismatchError } from '../../domain/errors/task-version-mismatch.error.js';
 import {
@@ -46,6 +47,7 @@ export class ChangeTaskStatusHandler {
     private readonly transactions: TransactionService,
     private readonly collaboration: CollaborationService,
     private readonly projectAccess: ProjectAccessService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   async execute(command: ChangeTaskStatusCommand): Promise<TaskOutput> {
@@ -154,7 +156,7 @@ export class ChangeTaskStatusHandler {
     // y este `UPDATE ... WHERE version = $esperado`, nunca porque no exista.
     if (!updated) throw new TaskVersionMismatchError(command.id, command.expected_version);
 
-    await this.collaboration.createTaskUpdate(tx, {
+    const taskUpdate = await this.collaboration.createTaskUpdate(tx, {
       id: newId(),
       organizationId: tenant.organizationId,
       createdByMemberId: tenant.memberId,
@@ -165,6 +167,31 @@ export class ChangeTaskStatusHandler {
       body: transition.reason,
       metadata: { from: current.status, to: command.to_status },
     });
+
+    // Un bloqueo avisa (ADR-019), en la misma transacción que lo registra:
+    //  - al responsable de la tarea, salvo que sea quien bloqueó (ve su propia tarea), directo;
+    //  - a la audiencia del proyecto (miembros explícitos y, si es de sitio, sus managers), por la
+    //    bandeja: quien bloquea puede ser un operario "solo asignado", que no ve `project_member`,
+    //    así que la audiencia la arma el worker con el contexto de sistema.
+    if (transition.requiresReason === 'block_report' && transition.reason) {
+      if (updated.assigneeMemberId) {
+        await this.notifications.notifyTaskBlockedToAssignee(tx, {
+          organizationId: tenant.organizationId,
+          actorMemberId: tenant.memberId,
+          assigneeMemberId: updated.assigneeMemberId,
+          taskId: updated.id,
+          projectId: updated.projectId,
+          taskTitle: updated.title,
+          taskUpdateId: taskUpdate.id,
+          reason: transition.reason,
+        });
+      }
+      await this.notifications.enqueueTaskBlockedFanout(tx, {
+        organizationId: tenant.organizationId,
+        actorMemberId: tenant.memberId,
+        taskUpdateId: taskUpdate.id,
+      });
+    }
 
     return { task: updated, fromStatus: current.status };
   }
