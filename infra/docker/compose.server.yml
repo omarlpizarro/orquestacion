@@ -81,6 +81,33 @@ services:
     security_opt: ["no-new-privileges:true"]
     logging: *logging
 
+  # Worker de pg-boss (ADR-018): hoy mantiene las particiones mensuales de audit_log.
+  # Misma imagen que la API, otro comando. Conecta como app_worker, nunca con las
+  # credenciales de la API ni de app_owner, y no publica puertos. Sin healthcheck a
+  # propósito: no escucha en ningún puerto, y la señal real de que anda es el job
+  # (scripts/verify-audit-worker.sh y el paso 7 de scripts/smoke-test.sh).
+  # Arranca después de las migraciones (deploy.sh): el esquema pgboss y el EXECUTE
+  # sobre app_ensure_audit_partitions los deja el migrador.
+  worker:
+    image: orquestacion-api:${GIT_COMMIT:?GIT_COMMIT lo fija scripts/compose.sh}
+    pull_policy: never
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    working_dir: /repo/apps/worker
+    command: ["node", "dist/main.js"]
+    environment:
+      NODE_ENV: production
+      DATABASE_WORKER_URL: postgres://app_worker:${APP_WORKER_PASSWORD:?Falta APP_WORKER_PASSWORD en infra/docker/.env}@postgres:5432/orquestacion
+      NODE_OPTIONS: --max-old-space-size=192
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 0.5
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    logging: *logging
+
   # Migraciones: paso explícito del deploy, nunca al arrancar la API (regla de
   # despliegues separados, CLAUDE.md §6). Es la única pieza que recibe las
   # credenciales de app_owner; el contenedor de la API no las ve.

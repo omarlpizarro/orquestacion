@@ -530,7 +530,9 @@ Confirmar antes de implementar lo que dependa de ellas:
    `CHECK`.
 2. Recursos con capacidad mayor a uno (hoy cada unidad física es un recurso).
 3. Si se permiten reservas sin conexión (hoy sí, como `tentative`).
-4. Retención del audit log en meses.
+4. ~~Retención del audit log en meses.~~ **Cerrada en ADR-018** como umbral de 60
+   meses en código, solo informativo (no se borra nada). Falta el ADR de archivado
+   y la pregunta legal para salud antes del primer cliente de ese sector.
 5. ~~Si `project.site_id` es obligatorio.~~ **Cerrada e implementada en fase
    2 (ADR-013), migraciones `0009`/`0010`:** `project.site_id` pasa a
    `NOT NULL`; al crear una organización se crea un `site` por defecto.

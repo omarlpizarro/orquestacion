@@ -73,11 +73,15 @@ rompe.
 
 ## Despliegue en el server de demo
 
-API + Postgres en Docker Compose, sobre el servidor Ubuntu compartido. Todo
+API + worker + Postgres en Docker Compose, sobre el servidor Ubuntu compartido. Todo
 lo que se crea lleva el prefijo `orquestacion` (proyecto de Compose, red,
 volumen, contenedores) y tiene límite de memoria: en ese server corren otros
-proyectos que no hay que tocar. `web`, `worker` y MinIO no se despliegan
-todavía (ver `docs/phase-2-brief.md`).
+proyectos que no hay que tocar. `web` y MinIO no se despliegan todavía (ver
+`docs/phase-2-brief.md`). El `worker` (pg-boss) sí, desde ADR-018: hoy solo
+mantiene las particiones mensuales de `audit_log`. Misma imagen que la API,
+conecta como `app_worker` y no publica puertos. Para ver que anda:
+`scripts/verify-audit-worker.sh` (solo lectura); la prueba de humo lo chequea
+en su paso 7.
 
 | Pieza | Dónde |
 | --- | --- |

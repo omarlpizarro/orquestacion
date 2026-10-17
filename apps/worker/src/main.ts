@@ -2,6 +2,7 @@ import { loadWorkerEnv } from '@orq/config';
 import { createDb, createPool, withoutTenantTransaction } from '@orq/db';
 import { sql } from 'drizzle-orm';
 import { PgBoss } from 'pg-boss';
+import { startAuditMaintenance } from './audit-maintain.js';
 
 const QUEUE_HEALTH_PING = 'health.ping';
 
@@ -37,6 +38,8 @@ async function main() {
   });
 
   console.log('worker escuchando en', QUEUE_HEALTH_PING);
+
+  await startAuditMaintenance(boss, db);
 }
 
 main().catch((error) => {

@@ -19,6 +19,11 @@
 #      devuelve access_level = full para la cuenta de humo. Ejercita la
 #      creación (RLS por proyecto, el creador como miembro explícito) y la
 #      lectura con la identidad de producción.
+#   7. Worker de particiones del audit (ADR-018), SOLO LECTURA: falla si la última
+#      corrida de `audit.maintain` no terminó bien en las últimas 48 horas, si hay
+#      menos de 2 meses de particiones por delante, o si `audit_log_default` tiene
+#      filas. Así un worker caído se ve en el despliegue siguiente. El detalle (logs,
+#      últimas corridas) lo muestra scripts/verify-audit-worker.sh.
 #
 # Es idempotente: siempre usa el mismo usuario (smoke@orquestacion.test), la
 # misma organización (slug `smoke`) y el mismo proyecto (SMOKE-001), así que
@@ -181,6 +186,44 @@ access_level="$(json_field access_level < "$work_dir/body" || true)"
 [ "$access_level" = "full" ] \
   || fail "access_level de la cuenta de humo sobre $smoke_project_code es '${access_level:-<vacío>}', se esperaba 'full': $(cat "$work_dir/body")"
 pass "GET /projects/$project_id: access_level = full"
+
+echo
+echo "7. Worker de particiones del audit (solo lectura)"
+# Solo lectura, impuesta por Postgres y no por este script; `< /dev/null` porque
+# `compose exec -T` deja que psql herede el stdin del script y se lo come.
+audit_scalar() {
+  "$compose" exec -T -e PGOPTIONS='-c default_transaction_read_only=on' postgres \
+    psql -U postgres -d orquestacion -v ON_ERROR_STOP=1 -At -c "$1" < /dev/null
+}
+# Tras el primer despliegue del worker la primera corrida tarda unos segundos: se espera.
+last_run=""
+for _ in $(seq 1 12); do
+  last_run="$(audit_scalar "select state || '|' || extract(epoch from now() - completed_on)::bigint
+                              from pgboss.job
+                             where name = 'audit.maintain' and state in ('completed', 'failed')
+                             order by completed_on desc nulls last limit 1")"
+  [ -n "$last_run" ] && break
+  sleep 5
+done
+[ -n "$last_run" ] \
+  || fail "no hay ninguna corrida terminada de audit.maintain (¿el worker está arriba? scripts/verify-audit-worker.sh)"
+[ "${last_run%%|*}" = "completed" ] \
+  || fail "la última corrida terminada de audit.maintain quedó '${last_run%%|*}' (scripts/verify-audit-worker.sh)"
+age_seconds="${last_run##*|}"
+[ "$age_seconds" -le 172800 ] \
+  || fail "la última corrida exitosa de audit.maintain es de hace más de 48 horas (scripts/verify-audit-worker.sh)"
+pass "audit.maintain: última corrida completed, hace $((age_seconds / 60)) minutos"
+ahead="$(audit_scalar "select count(*) from pg_inherits i join pg_class c on c.oid = i.inhrelid
+                        where i.inhparent = 'public.audit_log'::regclass
+                          and c.relname ~ '^audit_log_[0-9]{4}_[0-9]{2}\$'
+                          and c.relname > 'audit_log_' || to_char(now() at time zone 'UTC', 'YYYY_MM')")"
+[ "$ahead" -ge 2 ] \
+  || fail "solo $ahead mes(es) de particiones de audit_log por delante del actual (se piden al menos 2)"
+pass "$ahead mes(es) de particiones por delante del actual"
+default_rows="$(audit_scalar "select count(*) from public.audit_log_default")"
+[ "$default_rows" = "0" ] \
+  || fail "audit_log_default tiene $default_rows fila(s): el job no puede crear la partición de ese mes (ADR-018)"
+pass "audit_log_default está vacía"
 
 echo
 echo "Prueba de humo OK."

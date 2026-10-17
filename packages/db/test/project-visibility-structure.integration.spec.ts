@@ -470,17 +470,18 @@ describe('estructura de visibilidad de proyectos (0012)', () => {
     });
 
     it('verificado: no se puede crear la partición de un mes si la DEFAULT ya tiene filas de ese mes', async () => {
-      // Lo que el job del paso 8 tiene que contemplar (docs/phase-2-brief.md).
+      // Lo que el job de particiones tiene que contemplar (ADR-018): falla fuerte.
       await asA((tx) =>
         tx.execute(sql`
           insert into audit_log (organization_id, entity_type, entity_id, action, changed, created_at)
-          values (${orgA}, 'project', ${randomUUID()}, 'insert', '{}', '2099-03-15T00:00:00Z')
+          values (${orgA}, 'project', ${randomUUID()}, 'insert', '{}',
+                  date_trunc('month', now() at time zone 'UTC') + interval '20 months 14 days')
         `),
       );
       expect(await rowsInDefaultPartition()).toBe(1);
 
       await expect(
-        harness.ownerDb.execute(sql`select app_ensure_audit_partitions('2099-03-01', 1)`),
+        harness.ownerDb.execute(sql`select app_ensure_audit_partitions(current_date, 24)`),
       ).rejects.toMatchObject({ cause: { code: '23514' } });
     });
   });

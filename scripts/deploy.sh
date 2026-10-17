@@ -25,7 +25,7 @@
 # no la del commit destino. La primera vez que un deploy trae este mecanismo
 # todavía corre la versión vieja, sin relanzamiento; rige desde el siguiente.
 #
-# Orden fijo: pull -> build -> migraciones -> reinicio. Las migraciones son un
+# Orden fijo: pull -> build -> migraciones -> reinicio (API y después worker). Las migraciones son un
 # paso explícito y nunca corren al arrancar el contenedor de la API
 # (CLAUDE.md §6: despliegues separados). Si un paso falla, `set -e` corta ahí:
 # una migración rota deja corriendo la versión anterior de la API.
@@ -126,10 +126,10 @@ esac
 # --- Pasos -------------------------------------------------------------------
 
 if [ -n "$target" ]; then
-  step 1/5 "checkout de $target_commit (vuelta atrás)"
+  step 1/6 "checkout de $target_commit (vuelta atrás)"
   git_repo checkout --quiet --detach "$target_commit"
 elif $pull; then
-  step 1/5 "git pull --ff-only"
+  step 1/6 "git pull --ff-only"
   git_repo pull --ff-only
   # Bash sigue ejecutando la versión de este script que ya cargó: si el pull
   # la cambió, los cambios regirían recién en el despliegue siguiente. Se
@@ -141,9 +141,9 @@ elif $pull; then
     DEPLOY_REEXEC=1 exec bash "$repo_root/scripts/deploy.sh" --no-pull
   fi
 elif [ -n "${DEPLOY_REEXEC:-}" ]; then
-  step 1/5 "git pull (hecho antes del relanzamiento)"
+  step 1/6 "git pull (hecho antes del relanzamiento)"
 else
-  step 1/5 "git pull (omitido por --no-pull)"
+  step 1/6 "git pull (omitido por --no-pull)"
 fi
 
 commit="$(git_repo rev-parse HEAD)"
@@ -154,7 +154,7 @@ if [ "$behind" -gt 0 ]; then
 fi
 
 image="$image_repo:$commit"
-step 2/5 "imagen de la API"
+step 2/6 "imagen de la API"
 if docker image inspect "$image" >/dev/null 2>&1; then
   # Solo se construye con el árbol limpio (chequeo de arriba), así que una
   # imagen con este tag corresponde exactamente a este commit.
@@ -165,7 +165,7 @@ fi
 
 # Postgres tiene que estar arriba para migrar. Es un prerrequisito, no el
 # reinicio: `up -d` no toca un contenedor cuya configuración no cambió.
-step 3/5 "Postgres arriba (prerrequisito de las migraciones)"
+step 3/6 "Postgres arriba (prerrequisito de las migraciones)"
 "$compose" up -d --wait postgres
 
 # El migrador de Drizzle solo aplica lo posterior a la última migración
@@ -180,11 +180,18 @@ if [ "$applied" -gt "$known" ]; then
   echo "       esas migraciones son compatibles hacia atrás (CLAUDE.md §6)."
 fi
 
-step 4/5 "migraciones (como app_owner, contenedor efímero)"
+step 4/6 "migraciones (como app_owner, contenedor efímero)"
 "$compose" run --rm migrate
 
-step 5/5 "reinicio de la API"
+step 5/6 "reinicio de la API"
 "$compose" up -d --wait api
+
+# Después de las migraciones, nunca antes: el worker necesita el esquema pgboss y el
+# EXECUTE sobre app_ensure_audit_partitions que deja el migrador (ADR-018). Sin
+# healthcheck (no escucha en ningún puerto): `--wait` espera a que esté corriendo, y que
+# el job de verdad ande lo verifica el paso 7 de smoke-test.sh.
+step 6/6 "reinicio del worker"
+"$compose" up -d --wait worker
 
 # --- Verificación ------------------------------------------------------------
 
