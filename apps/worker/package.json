@@ -12,7 +12,9 @@
     "test:integration": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
+    "@orq/api": "workspace:*",
     "@orq/config": "workspace:*",
+    "@orq/contracts": "workspace:*",
     "@orq/db": "workspace:*",
     "drizzle-orm": "0.45.2",
     "pg-boss": "catalog:"

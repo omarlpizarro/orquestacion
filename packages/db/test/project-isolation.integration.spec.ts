@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { withSystemScanTransaction, withSystemTransaction } from '../src/system-transaction.js';
 import { insertAuthMember, insertAuthOrganization } from '../src/testing/auth-fixtures.js';
 import { type PostgresHarness, startPostgresHarness } from '../src/testing/postgres-harness.js';
 import { type Tx, withTenantTransaction } from '../src/transaction.js';
@@ -368,10 +369,336 @@ describe('aislamiento por proyecto (ADR-017)', () => {
     });
   });
 
+  describe('avisos (notification, ADR-019)', () => {
+    /**
+     * Sin RETURNING a propósito: quien asigna o bloquea crea el aviso de OTRO, y un
+     * RETURNING evaluaría la policy de lectura por destinatario sobre una fila que no es suya.
+     */
+    async function insertNotification(
+      tx: Tx,
+      params: { recipient: ActorName; by: ActorName; taskId: string; projectId: string },
+    ): Promise<string> {
+      const id = randomUUID();
+      await tx.execute(sql`
+        insert into notification (id, organization_id, created_by_member_id, recipient_member_id,
+                                  task_id, project_id, template_key, channel, status)
+        values (${id}, ${orgA}, ${memberId(params.by)}, ${memberId(params.recipient)},
+                ${params.taskId}, ${params.projectId}, 'task.assigned', 'inapp', 'delivered')
+        on conflict do nothing
+      `);
+      return id;
+    }
+    const notificationsQuery = sql`select id from notification`;
+    let forAssigned: string;
+
+    beforeAll(async () => {
+      // El creador (manager, miembro explícito de R) crea el aviso del operario asignado.
+      forAssigned = await as('creator', (tx) =>
+        insertNotification(tx, {
+          recipient: 'assigned',
+          by: 'creator',
+          taskId: taskAssigned,
+          projectId: projectR,
+        }),
+      );
+    });
+
+    it('el operario "solo asignado" ve su aviso y no ve ningún otro', async () => {
+      expect(await ids('assigned', notificationsQuery)).toEqual([forAssigned]);
+    });
+
+    it('un manager crea el aviso de un operario; otro operario no lo ve, ni quien lo creó, ni el owner', async () => {
+      // 'explicit' es operario con acceso completo a R; 'creator' lo creó y tiene acceso
+      // completo; 'owner' es privilegiado. Ninguno es el destinatario.
+      for (const actor of ['explicit', 'creator', 'owner', 'director', 'outsider'] as const) {
+        expect(await ids(actor, notificationsQuery), actor).toEqual([]);
+      }
+    });
+
+    it('el destinatario lo marca como leído; nadie más puede tocarlo', async () => {
+      const mark = (actor: ActorName) =>
+        as(actor, (tx) =>
+          tx.execute<{ id: string }>(
+            sql`update notification set read_at = now() where id = ${forAssigned} returning id`,
+          ),
+        );
+      for (const actor of ['explicit', 'creator', 'owner', 'outsider'] as const) {
+        expect((await mark(actor)).rows, actor).toEqual([]);
+      }
+      expect((await mark('assigned')).rows.map((row) => row.id)).toEqual([forAssigned]);
+      const read = await as('assigned', (tx) =>
+        tx.execute<{ read_at: string | null }>(
+          sql`select read_at from notification where id = ${forAssigned}`,
+        ),
+      );
+      expect(read.rows[0]?.read_at).not.toBeNull();
+    });
+
+    it('un INSERT ... RETURNING del aviso de otro falla: por eso se inserta sin RETURNING', async () => {
+      await expectPgError(
+        as('creator', (tx) =>
+          tx.execute(sql`
+            insert into notification (id, organization_id, created_by_member_id, recipient_member_id,
+                                      task_id, project_id, template_key, channel, status)
+            values (${randomUUID()}, ${orgA}, ${memberId('creator')}, ${memberId('assigned')},
+                    ${taskAssigned}, ${projectR}, 'task.assigned', 'inapp', 'delivered')
+            returning id
+          `),
+        ),
+        '42501',
+      );
+    });
+
+    it('quien no ve la tarea ni el proyecto no puede crear avisos sobre ellos', async () => {
+      await expectPgError(
+        as('outsider', (tx) =>
+          insertNotification(tx, {
+            recipient: 'creator',
+            by: 'outsider',
+            taskId: taskAssigned,
+            projectId: projectR,
+          }),
+        ),
+        '42501',
+      );
+    });
+
+    it('quien pierde el acceso al proyecto deja de ver sus avisos de él', async () => {
+      const setMembership = (deletedAt: 'now()' | 'null') =>
+        as('owner', (tx) =>
+          tx.execute(
+            sql`update project_member set deleted_at = ${sql.raw(deletedAt)}
+                 where project_id = ${projectR} and member_id = ${memberId('explicit')}`,
+          ),
+        );
+      // Un test anterior dejó a `explicit` fuera del proyecto: se lo vuelve a sumar para
+      // este caso y se restaura el estado anterior al terminar.
+      await setMembership('null');
+      try {
+        const forExplicit = await as('owner', (tx) =>
+          insertNotification(tx, {
+            recipient: 'explicit',
+            by: 'owner',
+            taskId: taskUnassigned,
+            projectId: projectR,
+          }),
+        );
+        expect(await ids('explicit', notificationsQuery)).toEqual([forExplicit]);
+
+        await setMembership('now()');
+        expect(await ids('explicit', notificationsQuery)).toEqual([]);
+      } finally {
+        await setMembership('now()');
+      }
+    });
+
+    it('la tarea borrada saca el aviso de quien solo la tenía asignada', async () => {
+      const task = await as('owner', (tx) =>
+        insertTask(tx, { projectId: projectR, assignee: 'assigned', by: 'owner' }),
+      );
+      const notice = await as('owner', (tx) =>
+        insertNotification(tx, {
+          recipient: 'assigned',
+          by: 'owner',
+          taskId: task,
+          projectId: projectR,
+        }),
+      );
+      expect(await ids('assigned', notificationsQuery)).toContain(notice);
+
+      await as('owner', (tx) =>
+        tx.execute(sql`update task set deleted_at = now() where id = ${task}`),
+      );
+
+      expect(await ids('assigned', notificationsQuery)).not.toContain(notice);
+    });
+
+    it('otra organización no ve avisos ajenos', async () => {
+      const result = await withTenantTransaction(
+        harness.db,
+        { organizationId: orgB, memberId: `ownerb_${suffix}`, requestId: randomUUID() },
+        (tx) => tx.execute<{ id: string }>(notificationsQuery),
+      );
+      expect(result.rows).toEqual([]);
+    });
+  });
+
+  describe('bandeja de pendientes (notification_outbox, ADR-019)', () => {
+    const entityId = randomUUID();
+    const outboxIds = (rows: Array<{ id: string }>) => rows.map((row) => row.id);
+    let outboxA: string;
+    let outboxB: string;
+    const asOwnerOfB = <T>(run: (tx: Tx) => Promise<T>) =>
+      withTenantTransaction(
+        harness.db,
+        { organizationId: orgB, memberId: `ownerb_${suffix}`, requestId: randomUUID() },
+        run,
+      );
+    const countAsSuperuser = async () =>
+      Number(
+        (await harness.superuserPool.query('select count(*)::int as n from notification_outbox'))
+          .rows[0]?.n,
+      );
+
+    beforeAll(async () => {
+      outboxA = randomUUID();
+      outboxB = randomUUID();
+      await as('outsider', (tx) =>
+        tx.execute(sql`
+          insert into notification_outbox (id, organization_id, created_by_member_id, kind, entity_id)
+          values (${outboxA}, ${orgA}, ${memberId('outsider')}, 'task.blocked', ${entityId})
+        `),
+      );
+      await asOwnerOfB((tx) =>
+        tx.execute(sql`
+          insert into notification_outbox (id, organization_id, created_by_member_id, kind, entity_id)
+          values (${outboxB}, ${orgB}, ${`ownerb_${suffix}`}, 'task.blocked', ${entityId})
+        `),
+      );
+    });
+
+    it('la API (app_login) solo puede ENCOLAR: no lee la bandeja, ni siquiera la de su organización', async () => {
+      await expectPgError(
+        as('owner', (tx) => tx.execute(sql`select id from notification_outbox`)),
+        '42501',
+      );
+      await expectPgError(
+        as('owner', (tx) => tx.execute(sql`select count(*) from notification_outbox`)),
+        '42501',
+      );
+    });
+
+    it('app_login no puede marcar una fila como procesada, ni tocarla, ni borrarla', async () => {
+      await expectPgError(
+        as('owner', (tx) =>
+          tx.execute(
+            sql`update notification_outbox set processed_at = now() where id = ${outboxA}`,
+          ),
+        ),
+        '42501',
+      );
+      await expectPgError(
+        as('owner', (tx) =>
+          tx.execute(sql`update notification_outbox set attempts = 0 where id = ${outboxA}`),
+        ),
+        '42501',
+      );
+      await expectPgError(
+        as('owner', (tx) => tx.execute(sql`delete from notification_outbox where id = ${outboxA}`)),
+        '42501',
+      );
+      // Y la fila sigue pendiente, intacta.
+      const { rows } = await harness.superuserPool.query(
+        'select processed_at, attempts from notification_outbox where id = $1',
+        [outboxA],
+      );
+      expect(rows[0]).toMatchObject({ processed_at: null, attempts: 0 });
+    });
+
+    it('los privilegios de tabla son exactamente los previstos', async () => {
+      const privilege = async (role: string, kind: string) =>
+        (
+          await harness.superuserPool.query(
+            `select has_table_privilege($1, 'public.notification_outbox', $2) as ok`,
+            [role, kind],
+          )
+        ).rows[0]?.ok as boolean;
+      expect(await privilege('app_login', 'INSERT')).toBe(true);
+      for (const kind of ['SELECT', 'UPDATE', 'DELETE']) {
+        expect(await privilege('app_login', kind), `app_login ${kind}`).toBe(false);
+        expect(await privilege('app_user', kind), `app_user ${kind}`).toBe(false);
+      }
+      expect(await privilege('app_worker', 'SELECT')).toBe(true);
+      expect(await privilege('app_worker', 'UPDATE')).toBe(true);
+      expect(await privilege('app_worker', 'DELETE')).toBe(false);
+    });
+
+    it('encolar dos veces lo mismo no duplica la fila (INSERT ... ON CONFLICT DO NOTHING sin leer)', async () => {
+      const before = await countAsSuperuser();
+      await as('outsider', (tx) =>
+        tx.execute(sql`
+          insert into notification_outbox (id, organization_id, created_by_member_id, kind, entity_id)
+          values (${randomUUID()}, ${orgA}, ${memberId('outsider')}, 'task.blocked', ${entityId})
+          on conflict do nothing
+        `),
+      );
+      expect(await countAsSuperuser()).toBe(before);
+    });
+
+    it('encolar para otra organización lo rechaza la policy de organización', async () => {
+      await expectPgError(
+        as('outsider', (tx) =>
+          tx.execute(sql`
+            insert into notification_outbox (id, organization_id, created_by_member_id, kind, entity_id)
+            values (${randomUUID()}, ${orgB}, ${memberId('outsider')}, 'task.blocked', ${randomUUID()})
+          `),
+        ),
+        '42501',
+      );
+    });
+
+    it('declarar alcance "sistema" desde la API (app_login) no abre nada', async () => {
+      await expectPgError(
+        harness.db.transaction(async (tx) => {
+          await tx.execute(sql`select set_config('app.scope', 'system', true)`);
+          return tx.execute(sql`select id from notification_outbox`);
+        }),
+        '42501',
+      );
+    });
+
+    it('app_worker con alcance de sistema y sin organización ve la bandeja de todas', async () => {
+      const result = await withSystemScanTransaction(
+        harness.workerDb,
+        { job: 'test', requestId: randomUUID() },
+        (tx) => tx.execute<{ id: string }>(sql`select id from notification_outbox`),
+      );
+      expect(outboxIds(result.rows).sort()).toEqual(sorted(outboxA, outboxB));
+    });
+
+    it('el mismo alcance no abre ninguna otra tabla', async () => {
+      const result = await withSystemScanTransaction(
+        harness.workerDb,
+        { job: 'test', requestId: randomUUID() },
+        (tx) => tx.execute<{ id: string }>(sql`select id from task`),
+      );
+      expect(result.rows).toEqual([]);
+    });
+
+    it('app_worker sin alcance de sistema tampoco ve nada', async () => {
+      const result = await harness.workerDb.transaction((tx) =>
+        tx.execute<{ id: string }>(sql`select id from notification_outbox`),
+      );
+      expect(result.rows).toEqual([]);
+    });
+
+    it('app_worker marca como procesada una fila de SU organización, pero no la de otra', async () => {
+      const mark = (organizationId: string, id: string) =>
+        withSystemTransaction(
+          harness.workerDb,
+          { organizationId, job: 'test', requestId: randomUUID() },
+          (tx) =>
+            tx.execute<{ id: string }>(
+              sql`update notification_outbox set processed_at = now() where id = ${id} returning id`,
+            ),
+        );
+      // Con el contexto de A no puede tocar la fila de B.
+      expect((await mark(orgA, outboxB)).rows).toEqual([]);
+      expect(outboxIds((await mark(orgA, outboxA)).rows)).toEqual([outboxA]);
+      expect(outboxIds((await mark(orgB, outboxB)).rows)).toEqual([outboxB]);
+    });
+  });
+
   describe('cobertura del catálogo', () => {
     // Una tabla nueva con `project_id` sin fixture registrada acá hace fallar
     // este test: es lo que obliga a escribir su caso de aislamiento.
-    const tablesWithFixture = ['audit_log', 'project_member', 'task', 'task_update'];
+    const tablesWithFixture = [
+      'audit_log',
+      'notification',
+      'project_member',
+      'task',
+      'task_update',
+    ];
 
     it('toda tabla con project_id tiene fixture y policies restrictivas por proyecto', async () => {
       const result = await harness.ownerDb.execute<{ table_name: string }>(sql`

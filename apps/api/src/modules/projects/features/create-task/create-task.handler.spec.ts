@@ -4,6 +4,7 @@ import type { TransactionService } from '../../../../shared/database/transaction
 import { domainEvents } from '../../../../shared/domain-events/domain-events.js';
 import { MutationIdReusedError } from '../../../../shared/errors/mutation-id-reused.error.js';
 import { runWithRequestContext } from '../../../../shared/request-context/request-context.js';
+import type { NotificationsService } from '../../../notifications/notifications.module.js';
 import type { TenancyService } from '../../../tenancy/tenancy.module.js';
 import { AssigneeNotAssignableError } from '../../domain/errors/assignee-not-assignable.error.js';
 import { ParentTaskNotFoundError } from '../../domain/errors/parent-task-not-found.error.js';
@@ -86,12 +87,22 @@ function buildHandler(
     hasFullAccess: vi.fn().mockResolvedValue(options.hasFullAccess ?? true),
     isExplicitMember: vi.fn().mockResolvedValue(options.isExplicitMember ?? false),
   };
+  const notifications = {
+    notifyTaskAssigned: vi.fn().mockResolvedValue(undefined),
+    notifyTaskBlockedToAssignee: vi.fn().mockResolvedValue(undefined),
+    enqueueTaskBlockedFanout: vi.fn().mockResolvedValue(undefined),
+  };
   const handler = new CreateTaskHandler(
     transactions,
     tenancy as unknown as TenancyService,
     projectAccess as unknown as ProjectAccessService,
+    notifications as unknown as NotificationsService,
   );
-  return Object.assign(handler, { tenancyMock: tenancy, projectAccessMock: projectAccess });
+  return Object.assign(handler, {
+    tenancyMock: tenancy,
+    projectAccessMock: projectAccess,
+    notificationsMock: notifications,
+  });
 }
 
 function run<T>(command: CreateTaskCommand, handler: CreateTaskHandler): Promise<T> {
@@ -397,5 +408,58 @@ describe('CreateTaskHandler', () => {
 
     await expect(run(baseCommand, handler)).rejects.toBeInstanceOf(MutationIdReusedError);
     expect(insertTask).not.toHaveBeenCalled();
+  });
+  describe('avisos (ADR-019)', () => {
+    it('una tarea que nace asignada avisa a su responsable, en la misma transacción', async () => {
+      vi.mocked(insertTask).mockResolvedValue({
+        ...insertedTask,
+        assigneeMemberId: 'member_assignee',
+      });
+      const handler = buildHandler();
+
+      await run({ ...baseCommand, assignee_member_id: 'member_assignee' }, handler);
+
+      expect(handler.notificationsMock.notifyTaskAssigned).toHaveBeenCalledWith(
+        {},
+        {
+          organizationId: tenant.organizationId,
+          actorMemberId: tenant.memberId,
+          recipientMemberId: 'member_assignee',
+          taskId: insertedTask.id,
+          projectId: insertedTask.projectId,
+          taskTitle: insertedTask.title,
+          taskVersion: insertedTask.version,
+        },
+      );
+    });
+
+    it('una tarea sin responsable no avisa a nadie', async () => {
+      const handler = buildHandler();
+
+      await run(baseCommand, handler);
+
+      expect(handler.notificationsMock.notifyTaskAssigned).not.toHaveBeenCalled();
+    });
+
+    it('un reintento (la mutación ya estaba reservada) no avisa de nuevo', async () => {
+      vi.mocked(claimMutation).mockResolvedValue({
+        claimed: false,
+        prior: {
+          kind: 'task.create',
+          entityId: baseCommand.id,
+          result: 'applied',
+          rejectionReason: null,
+        },
+      });
+      vi.mocked(findTaskById).mockResolvedValue({
+        ...insertedTask,
+        assigneeMemberId: 'member_assignee',
+      });
+      const handler = buildHandler();
+
+      await run({ ...baseCommand, assignee_member_id: 'member_assignee' }, handler);
+
+      expect(handler.notificationsMock.notifyTaskAssigned).not.toHaveBeenCalled();
+    });
   });
 });

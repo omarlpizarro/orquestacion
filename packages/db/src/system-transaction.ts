@@ -41,3 +41,35 @@ export async function withSystemTransaction<T>(
     return handler(tx);
   });
 }
+
+export interface SystemScanContext {
+  job: string;
+  requestId: string;
+}
+
+/**
+ * Lectura transversal de sistema, SIN organización: para que un worker encuentre qué
+ * trabajo pendiente hay en todas las organizaciones (la bandeja de `notification_outbox`,
+ * ADR-019). Fija `app.scope = 'system'` y deja `app.current_org` sin fijar, así que las
+ * policies de organización no dejan pasar ninguna fila; solo ve lo que una policy
+ * permisiva concede de forma expresa a `session_user = 'app_worker'` con ese alcance (hoy,
+ * el SELECT de `notification_outbox_system_scan`). Cualquier otra tabla sigue devolviendo
+ * cero filas.
+ *
+ * Es solo para localizar: procesar una fila se hace después, dentro de
+ * `withSystemTransaction` de la organización de esa fila. Mismo subpath y misma barrera
+ * que `withSystemTransaction`.
+ */
+export async function withSystemScanTransaction<T>(
+  db: Db,
+  ctx: SystemScanContext,
+  handler: (tx: Tx) => Promise<T>,
+): Promise<T> {
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`
+      select set_config('app.scope',      'system', true),
+             set_config('app.request_id', ${`system:${ctx.job}:${ctx.requestId}`}, true)
+    `);
+    return handler(tx);
+  });
+}

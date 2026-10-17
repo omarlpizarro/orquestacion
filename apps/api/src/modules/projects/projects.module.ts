@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { CollaborationModule } from '../collaboration/collaboration.module.js';
+import { NotificationsModule } from '../notifications/notifications.module.js';
 import { TenancyModule } from '../tenancy/tenancy.module.js';
 import { AddProjectMemberController } from './features/add-project-member/add-project-member.controller.js';
 import { AddProjectMemberHandler } from './features/add-project-member/add-project-member.handler.js';
@@ -32,9 +33,10 @@ import { RemoveProjectMemberHandler } from './features/remove-project-member/rem
 import { UpdateTaskController } from './features/update-task/update-task.controller.js';
 import { UpdateTaskHandler } from './features/update-task/update-task.handler.js';
 import { ProjectAccessService } from './project-access.service.js';
+import { ProjectAudienceService } from './project-audience.service.js';
 
 @Module({
-  imports: [TenancyModule, CollaborationModule],
+  imports: [TenancyModule, CollaborationModule, NotificationsModule],
   controllers: [
     CreateProjectController,
     GetProjectController,
@@ -69,7 +71,12 @@ import { ProjectAccessService } from './project-access.service.js';
     ChangeTaskStatusHandler,
     MyDayHandler,
     ProjectAccessService,
+    ProjectAudienceService,
   ],
-  exports: [ProjectAccessService],
+  exports: [ProjectAccessService, ProjectAudienceService],
 })
 export class ProjectsModule {}
+
+// Otro módulo (o el worker) solo puede importar el archivo de módulo de este, nunca sus
+// internals (CLAUDE.md §5, dependency-cruiser `no-cross-module-internals`).
+export { ProjectAudienceService, type TaskBlockAudience } from './project-audience.service.js';

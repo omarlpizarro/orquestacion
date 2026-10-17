@@ -3,6 +3,7 @@ import { claimMutation } from '../../../../shared/database/mutation-log.js';
 import type { TransactionService } from '../../../../shared/database/transaction.service.js';
 import { domainEvents } from '../../../../shared/domain-events/domain-events.js';
 import { runWithRequestContext } from '../../../../shared/request-context/request-context.js';
+import type { NotificationsService } from '../../../notifications/notifications.module.js';
 import type { TenancyService } from '../../../tenancy/tenancy.module.js';
 import { AssigneeNotAssignableError } from '../../domain/errors/assignee-not-assignable.error.js';
 import { TaskAssignCancelledError } from '../../domain/errors/task-assign-cancelled.error.js';
@@ -69,12 +70,18 @@ function buildHandler(options: { hasFullAccess?: boolean; assignable?: boolean }
     hasFullAccess: vi.fn().mockResolvedValue(options.hasFullAccess ?? true),
     isExplicitMember: vi.fn().mockResolvedValue(false),
   };
+  const notifications = {
+    notifyTaskAssigned: vi.fn().mockResolvedValue(undefined),
+    notifyTaskBlockedToAssignee: vi.fn().mockResolvedValue(undefined),
+    enqueueTaskBlockedFanout: vi.fn().mockResolvedValue(undefined),
+  };
   const handler = new AssignTaskHandler(
     { withTenant } as unknown as TransactionService,
     tenancy as unknown as TenancyService,
     projectAccess as unknown as ProjectAccessService,
+    notifications as unknown as NotificationsService,
   );
-  return { handler, tenancy, projectAccess };
+  return { handler, tenancy, projectAccess, notifications };
 }
 
 const run = <T>(handler: AssignTaskHandler, command = baseCommand, role = tenant.role) =>
@@ -301,6 +308,87 @@ describe('AssignTaskHandler', () => {
       const { handler } = buildHandler();
 
       await expect(run(handler)).rejects.toBeInstanceOf(TaskNotFoundError);
+    });
+  });
+  describe('avisos (ADR-019)', () => {
+    it('asignar avisa a la persona asignada, en la misma transacción, con la versión ya asignada', async () => {
+      const { handler, notifications } = buildHandler();
+
+      await run(handler);
+
+      expect(notifications.notifyTaskAssigned).toHaveBeenCalledTimes(1);
+      expect(notifications.notifyTaskAssigned).toHaveBeenCalledWith(
+        {},
+        {
+          organizationId: tenant.organizationId,
+          actorMemberId: tenant.memberId,
+          recipientMemberId: 'member_nueva',
+          taskId: baseCommand.id,
+          projectId,
+          taskTitle: 'Excavar',
+          taskVersion: currentTask.version + 1,
+        },
+      );
+    });
+
+    it('no avisa al responsable anterior: solo a la persona asignada', async () => {
+      const { handler, notifications } = buildHandler();
+
+      await run(handler);
+
+      const recipients = notifications.notifyTaskAssigned.mock.calls.map(
+        (call) => call[1].recipientMemberId,
+      );
+      expect(recipients).toEqual(['member_nueva']);
+    });
+
+    it('desasignar no avisa a nadie', async () => {
+      const { handler, notifications } = buildHandler();
+
+      await run(handler, { ...baseCommand, assignee_member_id: null });
+
+      expect(notifications.notifyTaskAssigned).not.toHaveBeenCalled();
+    });
+
+    it('pedir el responsable que ya tiene no avisa (no cambió nada)', async () => {
+      const { handler, notifications } = buildHandler();
+
+      await run(handler, { ...baseCommand, assignee_member_id: 'member_anterior' });
+
+      expect(notifications.notifyTaskAssigned).not.toHaveBeenCalled();
+    });
+
+    it('un reintento (la mutación ya estaba reservada) no avisa de nuevo', async () => {
+      vi.mocked(claimMutation).mockResolvedValue({
+        claimed: false,
+        prior: {
+          kind: 'task.assign',
+          entityId: baseCommand.id,
+          result: 'applied',
+          rejectionReason: null,
+        },
+      });
+      const { handler, notifications } = buildHandler();
+
+      await run(handler);
+
+      expect(notifications.notifyTaskAssigned).not.toHaveBeenCalled();
+    });
+
+    it('si el UPDATE pierde la carrera de versión, no avisa', async () => {
+      vi.mocked(updateTaskAssignee).mockResolvedValue(null);
+      const { handler, notifications } = buildHandler();
+
+      await expect(run(handler)).rejects.toBeInstanceOf(TaskVersionMismatchError);
+
+      expect(notifications.notifyTaskAssigned).not.toHaveBeenCalled();
+    });
+
+    it('si crear el aviso falla, el error se propaga (la transacción hace rollback con la asignación)', async () => {
+      const { handler, notifications } = buildHandler();
+      notifications.notifyTaskAssigned.mockRejectedValue(new Error('boom'));
+
+      await expect(run(handler)).rejects.toThrow('boom');
     });
   });
 });

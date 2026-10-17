@@ -9,6 +9,7 @@ import {
   getRequestContext,
   type TenantIdentity,
 } from '../../../../shared/request-context/request-context.js';
+import { NotificationsService } from '../../../notifications/notifications.module.js';
 import { TenancyService } from '../../../tenancy/tenancy.module.js';
 import { AssigneeNotAssignableError } from '../../domain/errors/assignee-not-assignable.error.js';
 import { ProjectNotFoundError } from '../../domain/errors/project-not-found.error.js';
@@ -42,6 +43,7 @@ export class AssignTaskHandler {
     private readonly transactions: TransactionService,
     private readonly tenancy: TenancyService,
     private readonly projectAccess: ProjectAccessService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   async execute(command: AssignTaskCommand): Promise<TaskOutput> {
@@ -146,6 +148,20 @@ export class AssignTaskHandler {
     // `current` confirmó que la tarea existe: si acá vuelve vacío es porque alguien más
     // ganó la carrera entre esa lectura y este `UPDATE ... WHERE version = $esperado`.
     if (!updated) throw new TaskVersionMismatchError(command.id, command.expected_version);
+
+    // Se avisa solo a la persona asignada (no a quien dejó la tarea), en la misma transacción:
+    // el aviso y la asignación confirman juntos (ADR-019). Desasignar no avisa a nadie.
+    if (updated.assigneeMemberId) {
+      await this.notifications.notifyTaskAssigned(tx, {
+        organizationId,
+        actorMemberId: memberId,
+        recipientMemberId: updated.assigneeMemberId,
+        taskId: updated.id,
+        projectId: updated.projectId,
+        taskTitle: updated.title,
+        taskVersion: updated.version,
+      });
+    }
 
     return { task: updated, changed: true, previousAssigneeMemberId };
   }

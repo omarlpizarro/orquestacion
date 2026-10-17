@@ -7,6 +7,7 @@ import { TransactionService } from '../../../../shared/database/transaction.serv
 import { domainEvents } from '../../../../shared/domain-events/domain-events.js';
 import type { TenantIdentity } from '../../../../shared/request-context/request-context.js';
 import { getRequestContext } from '../../../../shared/request-context/request-context.js';
+import { NotificationsService } from '../../../notifications/notifications.module.js';
 import { TenancyService } from '../../../tenancy/tenancy.module.js';
 import { AssigneeNotAssignableError } from '../../domain/errors/assignee-not-assignable.error.js';
 import { ParentTaskNotFoundError } from '../../domain/errors/parent-task-not-found.error.js';
@@ -39,6 +40,7 @@ export class CreateTaskHandler {
     private readonly transactions: TransactionService,
     private readonly tenancy: TenancyService,
     private readonly projectAccess: ProjectAccessService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   async execute(command: CreateTaskCommand): Promise<TaskOutput> {
@@ -176,6 +178,20 @@ export class CreateTaskHandler {
       ackRequired: command.ack_required ?? false,
       position: nextTaskPosition(lastPosition),
     });
+
+    // Una tarea que nace asignada avisa a su responsable (no si se la asigna quien la crea),
+    // en la misma transacción (ADR-019).
+    if (created.assigneeMemberId) {
+      await this.notifications.notifyTaskAssigned(tx, {
+        organizationId: tenant.organizationId,
+        actorMemberId: tenant.memberId,
+        recipientMemberId: created.assigneeMemberId,
+        taskId: created.id,
+        projectId: created.projectId,
+        taskTitle: created.title,
+        taskVersion: created.version,
+      });
+    }
 
     return { task: created, created: true };
   }

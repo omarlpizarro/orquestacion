@@ -11,6 +11,7 @@ import {
   CollaborationService,
   type TaskUpdateKind,
 } from '../../../collaboration/collaboration.module.js';
+import { NotificationsService } from '../../../notifications/notifications.module.js';
 import { TaskNotFoundError } from '../../domain/errors/task-not-found.error.js';
 import { TaskVersionMismatchError } from '../../domain/errors/task-version-mismatch.error.js';
 import {
@@ -25,6 +26,7 @@ import {
 } from '../../infrastructure/task.repository.js';
 import { toTaskOutput } from '../../infrastructure/task-output.mapper.js';
 import { ProjectAccessService } from '../../project-access.service.js';
+import { ProjectAudienceService } from '../../project-audience.service.js';
 import type { ChangeTaskStatusCommand } from './change-task-status.command.js';
 
 /**
@@ -46,6 +48,8 @@ export class ChangeTaskStatusHandler {
     private readonly transactions: TransactionService,
     private readonly collaboration: CollaborationService,
     private readonly projectAccess: ProjectAccessService,
+    private readonly notifications: NotificationsService,
+    private readonly audience: ProjectAudienceService,
   ) {}
 
   async execute(command: ChangeTaskStatusCommand): Promise<TaskOutput> {
@@ -154,7 +158,7 @@ export class ChangeTaskStatusHandler {
     // y este `UPDATE ... WHERE version = $esperado`, nunca porque no exista.
     if (!updated) throw new TaskVersionMismatchError(command.id, command.expected_version);
 
-    await this.collaboration.createTaskUpdate(tx, {
+    const taskUpdate = await this.collaboration.createTaskUpdate(tx, {
       id: newId(),
       organizationId: tenant.organizationId,
       createdByMemberId: tenant.memberId,
@@ -165,6 +169,38 @@ export class ChangeTaskStatusHandler {
       body: transition.reason,
       metadata: { from: current.status, to: command.to_status },
     });
+
+    // Un bloqueo avisa (ADR-019), en la misma transacción que lo registra. La audiencia es UNA
+    // sola definición (`ProjectAudienceService`), la misma que usa el worker:
+    //  - acá se la calcula con la identidad de quien bloquea y se avisa a todos los que alcanza a
+    //    ver (el responsable de la tarea siempre; los miembros del proyecto y los managers del
+    //    sitio si quien bloquea tiene acceso completo). Nunca de más: RLS solo oculta filas;
+    //  - y se deja el pedido en la bandeja, siempre, para que el worker complete con el contexto
+    //    de sistema lo que acá no se veía (quien bloquea puede ser un operario "solo asignado",
+    //    que no lee `project_member`). Lo que ya se avisó no se repite (`dedupe_key`).
+    if (transition.requiresReason === 'block_report') {
+      const audience = await this.audience.listTaskBlockAudience(tx, {
+        organizationId: tenant.organizationId,
+        taskUpdateId: taskUpdate.id,
+      });
+      if (audience) {
+        await this.notifications.notifyTaskBlocked(tx, {
+          organizationId: tenant.organizationId,
+          actorMemberId: tenant.memberId,
+          recipientMemberIds: audience.recipientMemberIds,
+          taskId: audience.taskId,
+          projectId: audience.projectId,
+          taskTitle: audience.taskTitle,
+          taskUpdateId: audience.taskUpdateId,
+          reason: audience.reason,
+        });
+      }
+      await this.notifications.enqueueTaskBlockedFanout(tx, {
+        organizationId: tenant.organizationId,
+        actorMemberId: tenant.memberId,
+        taskUpdateId: taskUpdate.id,
+      });
+    }
 
     return { task: updated, fromStatus: current.status };
   }

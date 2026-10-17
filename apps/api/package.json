@@ -3,6 +3,29 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "exports": {
+    "./collaboration": {
+      "source": "./src/modules/collaboration/collaboration.module.ts",
+      "types": "./dist/src/modules/collaboration/collaboration.module.d.ts",
+      "default": "./dist/src/modules/collaboration/collaboration.module.js"
+    },
+    "./notifications": {
+      "source": "./src/modules/notifications/notifications.module.ts",
+      "types": "./dist/src/modules/notifications/notifications.module.d.ts",
+      "default": "./dist/src/modules/notifications/notifications.module.js"
+    },
+    "./projects": {
+      "source": "./src/modules/projects/projects.module.ts",
+      "types": "./dist/src/modules/projects/projects.module.d.ts",
+      "default": "./dist/src/modules/projects/projects.module.js"
+    },
+    "./tenancy": {
+      "source": "./src/modules/tenancy/tenancy.module.ts",
+      "types": "./dist/src/modules/tenancy/tenancy.module.d.ts",
+      "default": "./dist/src/modules/tenancy/tenancy.module.js"
+    },
+    "./package.json": "./package.json"
+  },
   "scripts": {
     "build": "nest build",
     "dev": "nest start --watch",

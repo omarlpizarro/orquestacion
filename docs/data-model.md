@@ -62,7 +62,7 @@ Los cinco módulos del monolito modular mapean así:
 | `projects` | project, task, task\_dependency, sop\_template, sop\_template\_task, custom\_field\_definition |
 | `scheduling` | resource, resource\_group, resource\_booking |
 | `collaboration` | task\_update, attachment, task\_acknowledgement |
-| `notifications` | notification, notification\_preference, escalation\_policy |
+| `notifications` | notification, notification\_outbox, notification\_preference, escalation\_policy |
 
 `audit_log` es transversal: lo escriben triggers, no módulos. Ningún módulo consulta tablas de otro; se comunican por eventos in-process y por identificadores. Desde fase 2 (ADR-009) el mecanismo concreto es el `EventEmitter` nativo de Node, sin agregar un paquete de eventos: cada módulo emite (`TaskCreated`, etc.) aunque todavía no haya consumidores.
 
@@ -576,27 +576,60 @@ Se audita: `project` y `project_member` (desde `0012`) y `task` (desde `0019`); 
 
 ## Notificaciones, acuse y escalamiento
 
-El módulo D del relevamiento depende de una propiedad que no es obvia: la notificación no puede perderse si el proceso se cae entre el commit y el envío. Se resuelve encolando el trabajo en la misma transacción que escribe la tarea, algo que pg-boss permite porque su cola vive en el mismo Postgres.
+El módulo D del relevamiento depende de una propiedad que no es obvia: la notificación no puede perderse si el proceso se cae entre el commit y el envío. Se resuelve escribiendo el aviso, o un pedido de aviso, **en la misma transacción que escribe la tarea** (ADR-019). Hay dos mecanismos y los dos usan la base como cola:
+
+- **El aviso directo.** Cuando quien actúa conoce al destinatario y puede avisarle (el responsable de una tarea que se asigna o se bloquea, y la parte de la audiencia de un bloqueo que su identidad alcanza a ver), la mutación inserta la fila de `notification` en su propia transacción. Es lo que hacen `create-task`, `assign-task` y `change-task-status`.
+- **La bandeja (`notification_outbox`).** Cuando la audiencia depende de lo que quien actúa no puede ver (los miembros de un proyecto reservado, que un operario "solo asignado" no lee), la mutación inserta una fila de la bandeja con el id de la novedad, y un worker la levanta en contexto de sistema, arma la audiencia y crea los avisos. No se usa la cola de pg-boss porque la API no puede encolar ahí (solo `app_worker` tiene permisos sobre `pgboss`, ADR-017 §5) y porque la base no debe escribir en las tablas internas de pg-boss (ADR-019).
+
+El push de la parte 2 va a usar el mismo patrón: la mutación deja una fila `channel='push'`, `status='queued'`, y un job la levanta con `FOR UPDATE SKIP LOCKED`.
 
 ```sql
+-- Migración 0021. Las columnas estándar (§6) van aunque el boceto original no las listaba.
 CREATE TABLE notification (
-  id                 uuid PRIMARY KEY,
-  organization_id    text NOT NULL,
+  id                  uuid PRIMARY KEY,
+  organization_id     text NOT NULL,
+  created_at          timestamptz NOT NULL DEFAULT now(),
+  updated_at          timestamptz NOT NULL DEFAULT now(),
+  deleted_at          timestamptz,
+  version             integer NOT NULL DEFAULT 1,
+  created_by_member_id text NOT NULL,       -- quien hizo la acción que genera el aviso
   recipient_member_id text NOT NULL,
-  task_id            uuid,
-  template_key       text NOT NULL,
-  channel            text NOT NULL CHECK (channel IN ('inapp','push','email','whatsapp')),
-  payload            jsonb NOT NULL DEFAULT '{}',
-  status             text NOT NULL DEFAULT 'queued'
-                       CHECK (status IN ('queued','sent','delivered','failed','suppressed')),
-  dedupe_key         text,
-  scheduled_for      timestamptz,
-  sent_at            timestamptz,
-  read_at            timestamptz,
+  task_id             uuid,                 -- nulos solo para un aviso de la organización
+  project_id          uuid,
+  template_key        text NOT NULL,        -- hoy 'task.assigned' y 'task.blocked'
+  channel             text NOT NULL CHECK (channel IN ('inapp','push','email','whatsapp')),
+  payload             jsonb NOT NULL DEFAULT '{}',  -- foto del momento: título, quién actuó, extracto del motivo
+  status              text NOT NULL DEFAULT 'queued'
+                        CHECK (status IN ('queued','sent','delivered','failed','suppressed')),
+  dedupe_key          text,
+  scheduled_for       timestamptz,
+  sent_at             timestamptz,
+  read_at             timestamptz,
   provider_message_id text,
-  error              text,
-  created_at         timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (organization_id, dedupe_key)
+  error               text,
+  UNIQUE (organization_id, dedupe_key),
+  CHECK (task_id IS NULL OR project_id IS NOT NULL),
+  FOREIGN KEY (organization_id, task_id) REFERENCES task (organization_id, id),
+  FOREIGN KEY (organization_id, task_id, project_id) REFERENCES task (organization_id, id, project_id)
+);
+
+-- Bandeja de pendientes transaccional del módulo notifications. Solo lleva ids: el worker
+-- recalcula todo desde la base y no cree nada más de lo que dice la fila.
+CREATE TABLE notification_outbox (
+  id                   uuid PRIMARY KEY,
+  organization_id      text NOT NULL,
+  created_at           timestamptz NOT NULL DEFAULT now(),
+  updated_at           timestamptz NOT NULL DEFAULT now(),
+  deleted_at           timestamptz,
+  version              integer NOT NULL DEFAULT 1,
+  created_by_member_id text NOT NULL,       -- quien hizo la acción
+  kind                 text NOT NULL,       -- hoy 'task.blocked'; conjunto abierto, lo despacha el código
+  entity_id            uuid NOT NULL,       -- 'task.blocked': el id de la novedad (task_update)
+  processed_at         timestamptz,         -- NULL = pendiente
+  attempts             integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+  last_attempt_at      timestamptz,
+  last_error           text,
+  UNIQUE (organization_id, kind, entity_id)
 );
 
 CREATE TABLE notification_preference (
@@ -609,7 +642,15 @@ CREATE TABLE notification_preference (
 );
 ```
 
-`dedupe_key` evita el problema clásico: una tarea que se reprograma tres veces en cinco minutos no debe generar tres avisos. La clave se arma como `task:<id>:assigned:<version>` y el `UNIQUE` descarta el duplicado.
+`dedupe_key` evita el problema clásico: una tarea que se reprograma tres veces en cinco minutos no debe generar tres avisos. La clave se arma como `task:<id>:assigned:<destinatario>:<versión>` (asignación) o `task_update:<id>:blocked:<destinatario>` (bloqueo), y el `UNIQUE` descarta el duplicado: se inserta con `ON CONFLICT DO NOTHING`. La del bloqueo es la misma desde la API y desde el worker, así que un responsable que también pertenece a la audiencia recibe un solo aviso. Las claves y la forma del `payload` viven en `packages/contracts` (`notifications/notification-templates.ts`).
+
+**RLS de `notification`** (migración `0021`). `task_id` y `project_id` hacen que reciba las policies por proyecto de `app_apply_project_policies()` (acceso completo, o la tarea asignada: el operario "solo asignado" lee su aviso). A eso se suma una policy `RESTRICTIVE` por destinatario en `SELECT` y `UPDATE` (`recipient_member_id = app.current_member`), **no** en `INSERT`: quien asigna o bloquea crea avisos para otros. Ni `owner` ni `director` leen los de otros, y por eso la policy no usa `app_is_privileged()`. Un `INSERT ... RETURNING` de un aviso ajeno falla (la policy de lectura se evalúa sobre la fila devuelta): se inserta sin `RETURNING`. Quien pierde el acceso al proyecto, o la tarea asignada si la borran, deja de ver el aviso: la fila queda, la policy la esconde.
+
+**Permisos de `notification_outbox`.** La API (`app_login`) solo puede `INSERT`: no lee la bandeja ni marca nada como procesado. `SELECT` y `UPDATE` son solo de `app_worker`; `DELETE` de nadie (regla dura 9). Se revocan a `app_user`, de donde los heredaban los privilegios por defecto. `INSERT ... ON CONFLICT DO NOTHING`, sin objetivo de conflicto, no necesita `SELECT`.
+
+**RLS de `notification_outbox`.** La policy de organización de siempre, y una policy permisiva de `SELECT` (`notification_outbox_system_scan`) para `session_user = 'app_worker'` con `app.scope = 'system'`, sin organización: es lo único que deja al worker recorrer la bandeja de todas las organizaciones para encontrar trabajo (`withSystemScanTransaction`, `@orq/db/system`). Procesar una fila ocurre después, en `withSystemTransaction` de la organización de esa fila. No usa `app_is_privileged()`: su rama de `owner`/`director` dejaría a un dueño leer la bandeja de otra organización.
+
+**Migraciones con FK hacia `task`.** Desde la `0015`, agregar una FK hacia `task` con `ALTER TABLE ... ADD CONSTRAINT` falla con `42501`: el escaneo de validación lee `task` como `app_owner` bajo sus policies RLS, que llaman a funciones cuyo `EXECUTE` `app_owner` no tiene a propósito. Una tabla nueva declara las FK dentro del `CREATE TABLE` (no escanea nada). La `0021` lo hace así a mano.
 
 `quiet_hours` importa en gastronomía y salud, donde hay turnos nocturnos. Una alerta no crítica fuera de horario se difiere; una `critical` no.
 
@@ -875,7 +916,9 @@ Regla general: todo índice de una tabla de negocio arranca con `organization_id
 | `resource_booking` | el GiST de `resource_no_overlap` | Detección de traslape, ya existe por la constraint |
 | `resource_booking` | `(organization_id, resource_id, lower(period))` | Agenda de un recurso |
 | `task_update` | `(organization_id, task_id, created_at DESC)` | Bitácora de una tarea |
-| `notification` | `(recipient_member_id, read_at) WHERE read_at IS NULL` | Badge de no leídas |
+| `notification` | `(organization_id, recipient_member_id, id DESC)` | Listado de una persona, el más nuevo primero (el `id` es UUIDv7, ordena por tiempo y es el cursor) |
+| `notification` | `(organization_id, recipient_member_id) WHERE read_at IS NULL AND deleted_at IS NULL` | Badge de no leídas |
+| `notification_outbox` | `(organization_id, created_at) WHERE processed_at IS NULL` | Los pendientes que recorre el worker |
 | `audit_log` | `(organization_id, entity_type, entity_id, created_at DESC)` por partición | Consulta de trazabilidad |
 
 ### Particionado
@@ -1018,17 +1061,18 @@ slices siguientes contra una conexión que en los hechos ignora las policies.
 | `0018` | `validate_task_update_body_required` | `VALIDATE CONSTRAINT task_update_body_required_check`: segundo paso de la `0017`, en un despliegue posterior (CLAUDE.md §6). No bloquea lecturas ni escrituras | Hecha |
 | `0019` | `audit_task` | Trigger `task_audit` (`AFTER INSERT OR UPDATE OR DELETE`, por fila, `audit_trigger()` de la `0012`) sobre `task`. La entrada lleva el `project_id` de la tarea, así que se lee con acceso completo al proyecto. Solo registra desde acá: las tareas que ya existían no tienen entrada de alta | Hecha |
 | `0020` | `audit_partitions_guards` | ADR-018: `app_ensure_audit_partitions` valida `p_months` entre 1 y 24 y `p_from` a un mes o menos de hoy (`22023`, sin crear nada) y se le otorga `EXECUTE` a `app_worker`, para el job de particiones. Además la función solo crea, revoca y aplica policies si creó alguna partición, y `app_apply_tenant_policies()` solo hace el `ALTER ... ROW LEVEL SECURITY` si la tabla no lo tiene ya (antes tomaba `ACCESS EXCLUSIVE` sobre todas las tablas de negocio en cada llamada). Mismo cuerpo, `SECURITY DEFINER` y `search_path` de siempre. Compatible hacia atrás: la `0012` la llama dentro del rango | Hecha |
-| `0021` | `templates` | `sop_template`, `sop_template_task` | Pendiente |
-| `0022` | `custom_fields` | `custom_field_definition`, índices GIN | Pendiente |
-| `0023` | `resources` | `resource`, `resource_booking` con la exclusion constraint | Pendiente |
-| `0024` | `dependencies` | `task_dependency`, función anti-ciclos, `schedule_change` | Pendiente |
-| `0025` | `collaboration` (resto) | `attachment`, `task_acknowledgement` | Pendiente |
-| `0026` | `audit` | Resto del audit trail del paso 8: triggers de las demás tablas (`task` ya está desde la `0019`; el job de particiones y la retención son ADR-018 y la `0020`). `audit_log` y `audit_trigger()` ya existen desde `0012` | Pendiente |
-| `0027` | `notifications` | `notification`, `notification_preference`, `escalation_policy` | Pendiente |
-| `0028` | `sync` | Publicación lógica, `wal_level` (ya no `mutation_log`, adelantada a `0004`) | Pendiente |
-| `0029` | `billing` | `plan`, `subscription`, `payment_event`, `usage_counter` | Pendiente |
-| `0030` | `analytics` | `project_kpi` materializada y su job de refresco | Pendiente |
-| `0031` | `seed` | Planes, plantillas SOP por industria, catálogos iniciales | Pendiente |
+| `0021` | `notifications` | ADR-019: `notification` (avisos dentro de la app, con las policies por proyecto y por destinatario) y `notification_outbox` (bandeja de pendientes del worker, con su policy de lectura transversal para `app_worker`). Solo agrega tablas. Las FK hacia `task` van dentro del `CREATE TABLE` | Hecha |
+| `0022` | `templates` | `sop_template`, `sop_template_task` | Pendiente |
+| `0023` | `custom_fields` | `custom_field_definition`, índices GIN | Pendiente |
+| `0024` | `resources` | `resource`, `resource_booking` con la exclusion constraint | Pendiente |
+| `0025` | `dependencies` | `task_dependency`, función anti-ciclos, `schedule_change` | Pendiente |
+| `0026` | `collaboration` (resto) | `attachment`, `task_acknowledgement` | Pendiente |
+| `0027` | `audit` | Resto del audit trail del paso 8: triggers de las demás tablas (`task` ya está desde la `0019`; el job de particiones y la retención son ADR-018 y la `0020`). `audit_log` y `audit_trigger()` ya existen desde `0012` | Pendiente |
+| `0028` | `notifications_rest` | `notification_preference`, `escalation_policy` (`notification` y `notification_outbox` ya están desde la `0021`) | Pendiente |
+| `0029` | `sync` | Publicación lógica, `wal_level` (ya no `mutation_log`, adelantada a `0004`) | Pendiente |
+| `0030` | `billing` | `plan`, `subscription`, `payment_event`, `usage_counter` | Pendiente |
+| `0031` | `analytics` | `project_kpi` materializada y su job de refresco | Pendiente |
+| `0032` | `seed` | Planes, plantillas SOP por industria, catálogos iniciales | Pendiente |
 
 `0009`/`0010` (site_id obligatorio, ADR-013) no estaban en el plan original — se adelantan por la misma razón que `mutation_log` y `task_update`: el alcance por sitio, que sigue en fase 2, necesita la columna cerrada primero. Corrieron ellas dos en el lugar de `templates`/`custom_fields`, que se corren un lugar cada una. `0016` (adenda del ADR-017) y `0017` (el `CHECK` de `body`) corren una cada una. Desde acá los números de las pendientes son orientativos: el número real lo da el orden en que se mergean.
 

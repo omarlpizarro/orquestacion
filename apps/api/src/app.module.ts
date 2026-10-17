@@ -1,6 +1,7 @@
 import { type MiddlewareConsumer, Module, type NestModule } from '@nestjs/common';
 import { APP_FILTER } from '@nestjs/core';
 import { ORPCModule } from '@orpc/nest';
+import { NotificationsModule } from './modules/notifications/notifications.module.js';
 import { PlatformModule } from './modules/platform/platform.module.js';
 import { ProjectsModule } from './modules/projects/projects.module.js';
 import { TenancyModule } from './modules/tenancy/tenancy.module.js';
@@ -18,6 +19,7 @@ import { RequestContextMiddleware } from './shared/request-context/request-conte
     ORPCModule.forRoot({}),
     PlatformModule,
     TenancyModule,
+    NotificationsModule,
     ProjectsModule,
   ],
   providers: [{ provide: APP_FILTER, useClass: DomainErrorFilter }],

@@ -154,6 +154,25 @@ export async function isActiveProjectMember(
 }
 
 /**
+ * Los miembros explícitos (no borrados) de un proyecto. Lee con la identidad de `tx`: quien no
+ * tiene acceso completo no ve `project_member` (ADR-017) y recibe una lista vacía, que es el lado
+ * seguro; el contexto de sistema del worker la ve entera.
+ */
+export async function listActiveProjectMemberIds(
+  tx: Tx,
+  params: { organizationId: string; projectId: string },
+): Promise<string[]> {
+  const result = await tx.execute<{ member_id: string }>(sql`
+    select member_id from project_member
+     where organization_id = ${params.organizationId}
+       and project_id = ${params.projectId}
+       and deleted_at is null
+     order by member_id
+  `);
+  return result.rows.map((row) => row.member_id);
+}
+
+/**
  * `ON CONFLICT DO NOTHING` sobre el índice único parcial de miembros activos
  * (`project_member_org_project_member_active_uidx`): agregar a quien ya es
  * miembro no es un error ni duplica la fila, también si dos pedidos distintos lo

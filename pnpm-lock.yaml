@@ -318,9 +318,15 @@ importers:
 
   apps/worker:
     dependencies:
+      '@orq/api':
+        specifier: workspace:*
+        version: link:../api
       '@orq/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@orq/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
       '@orq/db':
         specifier: workspace:*
         version: link:../../packages/db
