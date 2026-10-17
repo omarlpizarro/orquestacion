@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { withSystemScanTransaction } from '../src/system-transaction.js';
+import { withSystemScanTransaction, withSystemTransaction } from '../src/system-transaction.js';
 import { insertAuthMember, insertAuthOrganization } from '../src/testing/auth-fixtures.js';
 import { type PostgresHarness, startPostgresHarness } from '../src/testing/postgres-harness.js';
 import { type Tx, withTenantTransaction } from '../src/transaction.js';
@@ -534,6 +534,11 @@ describe('aislamiento por proyecto (ADR-017)', () => {
         { organizationId: orgB, memberId: `ownerb_${suffix}`, requestId: randomUUID() },
         run,
       );
+    const countAsSuperuser = async () =>
+      Number(
+        (await harness.superuserPool.query('select count(*)::int as n from notification_outbox'))
+          .rows[0]?.n,
+      );
 
     beforeAll(async () => {
       outboxA = randomUUID();
@@ -552,14 +557,64 @@ describe('aislamiento por proyecto (ADR-017)', () => {
       );
     });
 
-    it('la API (con su identidad de siempre) encola y lee solo lo de su organización', async () => {
-      const mine = await as('owner', (tx) =>
-        tx.execute<{ id: string }>(sql`select id from notification_outbox`),
+    it('la API (app_login) solo puede ENCOLAR: no lee la bandeja, ni siquiera la de su organización', async () => {
+      await expectPgError(
+        as('owner', (tx) => tx.execute(sql`select id from notification_outbox`)),
+        '42501',
       );
-      expect(outboxIds(mine.rows)).toEqual([outboxA]);
+      await expectPgError(
+        as('owner', (tx) => tx.execute(sql`select count(*) from notification_outbox`)),
+        '42501',
+      );
     });
 
-    it('encolar dos veces lo mismo no duplica la fila', async () => {
+    it('app_login no puede marcar una fila como procesada, ni tocarla, ni borrarla', async () => {
+      await expectPgError(
+        as('owner', (tx) =>
+          tx.execute(
+            sql`update notification_outbox set processed_at = now() where id = ${outboxA}`,
+          ),
+        ),
+        '42501',
+      );
+      await expectPgError(
+        as('owner', (tx) =>
+          tx.execute(sql`update notification_outbox set attempts = 0 where id = ${outboxA}`),
+        ),
+        '42501',
+      );
+      await expectPgError(
+        as('owner', (tx) => tx.execute(sql`delete from notification_outbox where id = ${outboxA}`)),
+        '42501',
+      );
+      // Y la fila sigue pendiente, intacta.
+      const { rows } = await harness.superuserPool.query(
+        'select processed_at, attempts from notification_outbox where id = $1',
+        [outboxA],
+      );
+      expect(rows[0]).toMatchObject({ processed_at: null, attempts: 0 });
+    });
+
+    it('los privilegios de tabla son exactamente los previstos', async () => {
+      const privilege = async (role: string, kind: string) =>
+        (
+          await harness.superuserPool.query(
+            `select has_table_privilege($1, 'public.notification_outbox', $2) as ok`,
+            [role, kind],
+          )
+        ).rows[0]?.ok as boolean;
+      expect(await privilege('app_login', 'INSERT')).toBe(true);
+      for (const kind of ['SELECT', 'UPDATE', 'DELETE']) {
+        expect(await privilege('app_login', kind), `app_login ${kind}`).toBe(false);
+        expect(await privilege('app_user', kind), `app_user ${kind}`).toBe(false);
+      }
+      expect(await privilege('app_worker', 'SELECT')).toBe(true);
+      expect(await privilege('app_worker', 'UPDATE')).toBe(true);
+      expect(await privilege('app_worker', 'DELETE')).toBe(false);
+    });
+
+    it('encolar dos veces lo mismo no duplica la fila (INSERT ... ON CONFLICT DO NOTHING sin leer)', async () => {
+      const before = await countAsSuperuser();
       await as('outsider', (tx) =>
         tx.execute(sql`
           insert into notification_outbox (id, organization_id, created_by_member_id, kind, entity_id)
@@ -567,25 +622,29 @@ describe('aislamiento por proyecto (ADR-017)', () => {
           on conflict do nothing
         `),
       );
-      const count = await as('owner', (tx) =>
-        tx.execute<{ n: number }>(sql`select count(*)::int as n from notification_outbox`),
-      );
-      expect(count.rows[0]?.n).toBe(1);
+      expect(await countAsSuperuser()).toBe(before);
     });
 
-    it('declarar alcance "sistema" desde la API (app_login) no abre la lectura transversal', async () => {
-      const result = await harness.db.transaction(async (tx) => {
-        await tx.execute(sql`select set_config('app.scope', 'system', true)`);
-        return tx.execute<{ id: string }>(sql`select id from notification_outbox`);
-      });
-      expect(result.rows).toEqual([]);
+    it('encolar para otra organización lo rechaza la policy de organización', async () => {
+      await expectPgError(
+        as('outsider', (tx) =>
+          tx.execute(sql`
+            insert into notification_outbox (id, organization_id, created_by_member_id, kind, entity_id)
+            values (${randomUUID()}, ${orgB}, ${memberId('outsider')}, 'task.blocked', ${randomUUID()})
+          `),
+        ),
+        '42501',
+      );
     });
 
-    it('un owner de una organización no lee la bandeja de otra', async () => {
-      const result = await asOwnerOfB((tx) =>
-        tx.execute<{ id: string }>(sql`select id from notification_outbox`),
+    it('declarar alcance "sistema" desde la API (app_login) no abre nada', async () => {
+      await expectPgError(
+        harness.db.transaction(async (tx) => {
+          await tx.execute(sql`select set_config('app.scope', 'system', true)`);
+          return tx.execute(sql`select id from notification_outbox`);
+        }),
+        '42501',
       );
-      expect(outboxIds(result.rows)).toEqual([outboxB]);
     });
 
     it('app_worker con alcance de sistema y sin organización ve la bandeja de todas', async () => {
@@ -611,6 +670,22 @@ describe('aislamiento por proyecto (ADR-017)', () => {
         tx.execute<{ id: string }>(sql`select id from notification_outbox`),
       );
       expect(result.rows).toEqual([]);
+    });
+
+    it('app_worker marca como procesada una fila de SU organización, pero no la de otra', async () => {
+      const mark = (organizationId: string, id: string) =>
+        withSystemTransaction(
+          harness.workerDb,
+          { organizationId, job: 'test', requestId: randomUUID() },
+          (tx) =>
+            tx.execute<{ id: string }>(
+              sql`update notification_outbox set processed_at = now() where id = ${id} returning id`,
+            ),
+        );
+      // Con el contexto de A no puede tocar la fila de B.
+      expect((await mark(orgA, outboxB)).rows).toEqual([]);
+      expect(outboxIds((await mark(orgA, outboxA)).rows)).toEqual([outboxA]);
+      expect(outboxIds((await mark(orgB, outboxB)).rows)).toEqual([outboxB]);
     });
   });
 

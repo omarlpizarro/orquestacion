@@ -14,4 +14,10 @@ export class NotificationsModule {}
 
 // Otro módulo solo puede importar el archivo de módulo de este, nunca sus
 // internals (CLAUDE.md §5, dependency-cruiser `no-cross-module-internals`).
-export { NotificationsService } from './notifications.service.js';
+export {
+  NotificationsService,
+  OUTBOX_BACKOFF_STEP_SECONDS,
+  OUTBOX_BATCH_SIZE,
+  OUTBOX_MAX_ATTEMPTS,
+  TASK_BLOCKED_OUTBOX_KIND,
+} from './notifications.service.js';

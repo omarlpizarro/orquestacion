@@ -141,22 +141,21 @@ describe('avisos (integración)', () => {
       ...extra,
     });
 
-  /** La bandeja de la organización, leída con la identidad del dueño (RLS por organización). */
+  /**
+   * La bandeja de la organización, leída como superusuario del contenedor: la API (app_login) solo
+   * puede encolar, no leerla (ADR-019), y es justamente lo que se verifica abajo.
+   */
   async function outboxRows() {
-    const result = await withTenantTransaction(
-      db,
-      { organizationId, memberId: owner.memberId, requestId: newId() },
-      (tx) =>
-        tx.execute<{
-          id: string;
-          kind: string;
-          entity_id: string;
-          processed_at: string | null;
-          created_by_member_id: string;
-        }>(sql`
-          select id, kind, entity_id, processed_at, created_by_member_id
-            from notification_outbox order by created_at, id
-        `),
+    const result = await harness.superuserPool.query<{
+      id: string;
+      kind: string;
+      entity_id: string;
+      processed_at: string | null;
+      created_by_member_id: string;
+    }>(
+      `select id, kind, entity_id, processed_at, created_by_member_id
+         from notification_outbox where organization_id = $1 order by created_at, id`,
+      [organizationId],
     );
     return result.rows;
   }
@@ -372,7 +371,39 @@ describe('avisos (integración)', () => {
       });
     });
 
-    it('bloquear una tarea sin responsable también encola, sin aviso directo', async () => {
+    it('quien bloquea con acceso completo avisa de inmediato a los miembros del proyecto y al responsable', async () => {
+      const task = await createTask(reservedProjectId, { assignee_member_id: operatorA.memberId });
+
+      const response = await block(owner.cookie, task);
+      expect(response.statusCode, response.body).toBe(200);
+
+      const blockedFor = async (person: Person) =>
+        forTask(await list(person), task.id).filter((n) => n.template_key === 'task.blocked');
+      // El responsable y el miembro explícito del reservado; no quien bloqueó, ni quien no ve el proyecto.
+      expect(await blockedFor(operatorA)).toHaveLength(1);
+      expect(await blockedFor(operatorMember)).toHaveLength(1);
+      expect(await blockedFor(owner)).toEqual([]);
+      expect(await blockedFor(operatorB)).toEqual([]);
+      expect(await blockedFor(manager)).toEqual([]);
+    });
+
+    it('un operario "solo asignado" que bloquea no ve a los miembros: se encola y los completa el worker', async () => {
+      const task = await createTask(reservedProjectId, { assignee_member_id: operatorA.memberId });
+      const before = (await outboxRows()).length;
+
+      const response = await block(operatorA.cookie, task);
+      expect(response.statusCode, response.body).toBe(200);
+
+      // En la transacción de quien bloquea solo se ve lo que su identidad deja ver (aquí, nada).
+      expect(
+        forTask(await list(operatorMember), task.id).filter(
+          (n) => n.template_key === 'task.blocked',
+        ),
+      ).toEqual([]);
+      expect(await outboxRows()).toHaveLength(before + 1);
+    });
+
+    it('bloquear una tarea sin responsable también encola', async () => {
       const task = await createTask(openProjectId);
       const before = (await outboxRows()).length;
 
@@ -445,7 +476,9 @@ describe('avisos (integración)', () => {
 
   describe('listar y marcar como leído', () => {
     it('pagina por cursor, del más nuevo al más viejo, sin repetir ni saltar', async () => {
-      const person = operatorMember; // todavía sin avisos
+      const person = operatorMember;
+      // Otros tests ya le dejaron avisos a esta persona: se cuenta desde lo que ya tenía.
+      const existing = (await list(person)).unread_count;
       const taskIds: string[] = [];
       for (let i = 0; i < 5; i += 1) {
         const task = await createTask(openProjectId, { title: `Tarea ${i}` });
@@ -453,20 +486,19 @@ describe('avisos (integración)', () => {
         expect((await assign(manager.cookie, task, person.memberId)).statusCode).toBe(200);
       }
 
-      const page1 = await list(person, '?limit=2');
-      expect(page1.notifications).toHaveLength(2);
-      expect(page1.next_cursor).not.toBeNull();
-      expect(page1.unread_count).toBe(5);
-      const page2 = await list(person, `?limit=2&cursor=${page1.next_cursor}`);
-      expect(page2.notifications).toHaveLength(2);
-      const page3 = await list(person, `?limit=2&cursor=${page2.next_cursor}`);
-      expect(page3.notifications).toHaveLength(1);
-      expect(page3.next_cursor).toBeNull();
+      const pages: ListBody[] = [await list(person, '?limit=2')];
+      expect(pages[0]?.notifications).toHaveLength(2);
+      expect(pages[0]?.unread_count).toBe(existing + 5);
+      while (pages.at(-1)?.next_cursor) {
+        pages.push(await list(person, `?limit=2&cursor=${pages.at(-1)?.next_cursor}`));
+      }
 
-      const all = [...page1.notifications, ...page2.notifications, ...page3.notifications];
-      expect(new Set(all.map((n) => n.id)).size).toBe(5);
+      const all = pages.flatMap((page) => page.notifications);
+      expect(all).toHaveLength(existing + 5);
+      expect(new Set(all.map((n) => n.id)).size).toBe(existing + 5);
+      expect(pages.slice(0, -1).every((page) => page.notifications.length === 2)).toBe(true);
       // Del más nuevo al más viejo: la última tarea asignada primero.
-      expect(all.map((n) => n.task_id)).toEqual([...taskIds].reverse());
+      expect(all.slice(0, 5).map((n) => n.task_id)).toEqual([...taskIds].reverse());
     });
 
     it('un cursor inválido es 400', async () => {

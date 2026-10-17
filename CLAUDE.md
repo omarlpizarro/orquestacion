@@ -350,6 +350,23 @@ Detalle completo en `docs/data-model.md`. Lo mínimo que tenés que respetar sie
   `0009_project_site_id_check_not_valid.sql` (ADR-013) ya es el primer
   caso real, no un ejemplo hipotético.
 
+- **Una FK hacia una tabla con RLS forzada (`task`, `project`, `project_member`)
+  se declara dentro del `CREATE TABLE` de la tabla nueva, nunca con `ALTER TABLE
+  ... ADD CONSTRAINT`.** Verificado (migración `0021`, ADR-019), no supuesto:
+  desde la `0015` el `ALTER` falla con `42501: permission denied for function
+  app_is_privileged`, también con la tabla vacía. Por qué: `FORCE ROW LEVEL
+  SECURITY` hace que las policies apliquen también al dueño del esquema, las de
+  esas tablas llaman a funciones auxiliares (`app_is_privileged()`,
+  `app_full_access_project_ids()`, ...) cuyo `EXECUTE` `app_owner` no tiene a
+  propósito (son del rol `app_rls_helper`, ADR-017), y agregar una FK obliga a
+  `app_owner` a leer la tabla referenciada. Hasta `app_owner` falla un
+  `select` simple sobre `task`. Una FK declarada en el `CREATE TABLE` no
+  escanea nada y anda. Ojo con el ritual de `NOT VALID` de más abajo: acá no
+  alcanza, porque el `ADD CONSTRAINT ... NOT VALID` sí anda pero su
+  `VALIDATE CONSTRAINT` falla igual. Agregar una FK hacia esas tablas sobre una
+  tabla que ya existe no tiene camino por `ALTER` sin darle `EXECUTE` al dueño
+  (una decisión de arquitectura: plantearla antes, no resolverla en la migración).
+
 ### El caso de las reservas
 
 `resource_booking` tiene una exclusion constraint GiST que impide el traslape. No

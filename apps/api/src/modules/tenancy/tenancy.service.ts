@@ -13,7 +13,9 @@ import {
 import {
   findActiveSiteIds,
   findMemberForTenant,
+  findOrganizationMemberIds,
   findSiteForTenant,
+  findSiteManagerMemberIds,
   hasMemberSiteAccessRow,
 } from './infrastructure/site-access.repository.js';
 
@@ -114,6 +116,29 @@ export class TenancyService {
     params: { organizationId: string; memberId: string },
   ): Promise<boolean> {
     return (await findMemberForTenant(tx, params)) !== null;
+  }
+
+  /**
+   * Los `manager` con acceso a un sitio (ADR-019: a quién avisar de un bloqueo en un proyecto de
+   * sitio). Solo `manager`: `owner` y `director` trabajan en todos los sitios sin fila, y no por
+   * eso son audiencia.
+   */
+  listSiteManagerMemberIds(
+    tx: Tx,
+    params: { organizationId: string; siteId: string },
+  ): Promise<string[]> {
+    return findSiteManagerMemberIds(tx, params);
+  }
+
+  /**
+   * De estos ids, los que siguen siendo miembros de la organización: el hecho de figurar en
+   * `project_member` no prueba que lo sean (no hay FK hacia `auth.member`, ADR-010).
+   */
+  filterOrganizationMemberIds(
+    tx: Tx,
+    params: { organizationId: string; memberIds: string[] },
+  ): Promise<string[]> {
+    return findOrganizationMemberIds(tx, params);
   }
 
   /** ¿Existe este sitio en la organización? Para validar un `site_id` que llega en un pedido. */

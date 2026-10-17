@@ -139,8 +139,11 @@ export interface InsertNotificationParams {
  * `ON CONFLICT DO NOTHING` sobre `(organization_id, dedupe_key)`: el mismo aviso armado dos
  * veces es uno. En la parte 1 el único canal es `inapp`, y la fila ES el aviso: nace entregada.
  */
-export async function insertNotification(tx: Tx, params: InsertNotificationParams): Promise<void> {
-  await tx.execute(sql`
+export async function insertNotification(
+  tx: Tx,
+  params: InsertNotificationParams,
+): Promise<boolean> {
+  const result = await tx.execute(sql`
     insert into notification (
       id, organization_id, created_by_member_id, recipient_member_id, task_id, project_id,
       template_key, channel, payload, status, dedupe_key, sent_at
@@ -152,6 +155,8 @@ export async function insertNotification(tx: Tx, params: InsertNotificationParam
     )
     on conflict do nothing
   `);
+  // `false` si ya existía un aviso con esa `dedupe_key`.
+  return (result.rowCount ?? 0) > 0;
 }
 
 /** Encolar dos veces lo mismo (un reintento) no duplica la fila: `UNIQUE (organization_id, kind, entity_id)`. */
@@ -171,4 +176,84 @@ export async function insertOutboxEntry(
             ${params.kind}, ${params.entityId})
     on conflict do nothing
   `);
+}
+
+export interface OutboxEntryRef {
+  id: string;
+  organizationId: string;
+}
+
+/**
+ * Los pendientes de TODAS las organizaciones, los más viejos primero: solo localiza, no toma
+ * locks. Lo ve únicamente `app_worker` con el alcance de sistema (`withSystemScanTransaction`,
+ * policy `notification_outbox_system_scan`); con cualquier otra identidad devuelve vacío.
+ *
+ * Una fila con fallas espera `min(intentos, 6) × backoffStepSeconds` desde su último intento, así
+ * que una falla persistente no se reintenta a ritmo de sondeo, y a `maxAttempts` deja de
+ * reintentarse (sigue pendiente, a la vista).
+ */
+export async function findPendingOutboxEntries(
+  tx: Tx,
+  params: { limit: number; maxAttempts: number; backoffStepSeconds: number },
+): Promise<OutboxEntryRef[]> {
+  const result = await tx.execute<{ id: string; organization_id: string }>(sql`
+    select id, organization_id
+      from notification_outbox
+     where processed_at is null
+       and deleted_at is null
+       and attempts < ${params.maxAttempts}
+       and (last_attempt_at is null
+            or last_attempt_at < now() - make_interval(
+                 secs => least(attempts, 6) * ${params.backoffStepSeconds}))
+     order by created_at, id
+     limit ${params.limit}
+  `);
+  return result.rows.map((row) => ({ id: row.id, organizationId: row.organization_id }));
+}
+
+/**
+ * Toma la fila con `FOR UPDATE SKIP LOCKED`: si otro worker la tiene, o ya está procesada, `null`
+ * y el llamador sigue de largo. El bloqueo dura hasta el fin de la transacción.
+ */
+export async function claimOutboxEntry(
+  tx: Tx,
+  params: { organizationId: string; id: string },
+): Promise<{ kind: string; entityId: string } | null> {
+  const result = await tx.execute<{ kind: string; entity_id: string }>(sql`
+    select kind, entity_id
+      from notification_outbox
+     where id = ${params.id}
+       and organization_id = ${params.organizationId}
+       and processed_at is null
+       for update skip locked
+  `);
+  const row = result.rows[0];
+  return row ? { kind: row.kind, entityId: row.entity_id } : null;
+}
+
+export async function markOutboxEntryProcessed(
+  tx: Tx,
+  params: { organizationId: string; id: string },
+): Promise<void> {
+  await tx.execute(sql`
+    update notification_outbox
+       set processed_at = now()
+     where id = ${params.id} and organization_id = ${params.organizationId}
+  `);
+}
+
+/** Devuelve cuántos intentos lleva la fila, o 0 si ya no está pendiente. */
+export async function recordOutboxFailure(
+  tx: Tx,
+  params: { organizationId: string; id: string; message: string },
+): Promise<number> {
+  const result = await tx.execute<{ attempts: number }>(sql`
+    update notification_outbox
+       set attempts = attempts + 1, last_attempt_at = now(), last_error = ${params.message}
+     where id = ${params.id}
+       and organization_id = ${params.organizationId}
+       and processed_at is null
+    returning attempts
+  `);
+  return result.rows[0]?.attempts ?? 0;
 }

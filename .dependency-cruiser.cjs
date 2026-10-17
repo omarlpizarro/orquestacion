@@ -34,9 +34,21 @@ module.exports = {
     {
       name: 'no-app-to-app',
       severity: 'error',
-      comment: 'Una app nunca importa el código fuente de otra app.',
-      from: { path: '^apps/([^/]+)/' },
+      comment:
+        'Una app nunca importa el código fuente de otra app. La única excepción es el worker hacia lo que exportan los módulos de la API (regla de abajo).',
+      from: { path: '^apps/([^/]+)/', pathNot: '^apps/worker/' },
       to: { path: '^apps/([^/]+)/src', pathNot: '^apps/$1/' },
+    },
+    {
+      name: 'worker-imports-only-exported-module-entries',
+      severity: 'error',
+      comment:
+        'ADR-019: el worker corre código de los módulos de la API con su transacción de sistema (la audiencia de un bloqueo la define projects, una sola vez), pero solo importa lo que cada módulo exporta: su archivo de módulo, igual que otro módulo de la API (no-cross-module-internals). Nunca un internal (domain/, infrastructure/, features/), ni otra app. El paquete @orq/api además cierra el acceso con "exports": Node y TypeScript rechazan cualquier otra ruta; esta regla cubre el caso de un import relativo que se salte el paquete.',
+      from: { path: '^apps/worker/' },
+      to: {
+        path: '^apps/(api|web|mobile)/',
+        pathNot: '^apps/api/src/modules/[^/]+/[^/]+.module.ts$',
+      },
     },
     {
       name: 'only-database-layer-touches-the-driver',
@@ -129,7 +141,10 @@ module.exports = {
     },
     enhancedResolveOptions: {
       exportsFields: ['exports'],
-      conditionNames: ['import', 'node', 'default'],
+      // `source` va primero a propósito: @orq/api lo declara en `exports` para que el import del
+      // worker se resuelva al código fuente (apps/api/src/...) y no a dist, que más abajo se excluye;
+      // sin esto la arista no existiría y las reglas del worker quedarían mudas en silencio.
+      conditionNames: ['source', 'import', 'node', 'default'],
       mainFields: ['module', 'main', 'types'],
     },
   },

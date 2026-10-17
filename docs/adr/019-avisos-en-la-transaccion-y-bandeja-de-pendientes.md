@@ -36,13 +36,13 @@ ninguno confirma; no hay nada en memoria que un reinicio pueda perder. Los event
 siguen emitiéndose después del commit, para consumidores que toleren perderse; ningún aviso
 depende de ellos.
 
-### 2. Dos mecanismos, según se conozca o no al destinatario
+### 2. Dos caminos, según lo que quien actúa alcance a ver
 
 | Aviso | Quién lo crea | Dónde |
 | --- | --- | --- |
 | Asignación (`task.assigned`), también al crear una tarea ya asignada | La API | La misma transacción. Solo a la persona asignada; no a quien se asigna a sí mismo ni a quien perdió la tarea. Desasignar no avisa |
-| Bloqueo, al responsable de la tarea (`task.blocked`) | La API | La misma transacción. Salvo que el responsable sea quien bloqueó: ve su propia tarea y no se revela nada |
-| Bloqueo, al resto de la audiencia | El worker | Lo pide la API con una fila de `notification_outbox` en la misma transacción |
+| Bloqueo (`task.blocked`), a la audiencia que quien bloquea alcanza a ver | La API | La misma transacción. Siempre incluye al responsable de la tarea, salvo que sea quien bloqueó (ve su propia tarea y no se revela nada) |
+| Bloqueo, a la audiencia completa | El worker | Lo pide la API con una fila de `notification_outbox` en la misma transacción, siempre |
 
 ### 3. Por qué una bandeja propia y no la cola de pg-boss desde la base
 
@@ -90,21 +90,36 @@ El worker (`apps/worker`) la recorre cada 5 segundos:
 
 Las filas procesadas no se borran (regla dura 9). Crece una fila por bloqueo; es chica.
 
-### 5. Audiencia de un bloqueo
+### 5. Audiencia de un bloqueo: una sola definición, en `projects`
 
-Los miembros explícitos del proyecto (el creador incluido); si el proyecto es `site`, también los
-`manager` con acceso a ese sitio; el responsable de la tarea; menos quien reportó el bloqueo. `owner` y
-`director` solo si son miembros explícitos: nunca por ser privilegiados, porque avisarle a quien
-no ve un proyecto reservado revelaría que existe. Solo miembros que siguen en la organización
-(`project_member` no tiene FK hacia `auth.member`, ADR-010). El rol `manager` se compara por
-valor completo: un miembro con varios roles queda afuera, el mismo lado seguro que
+`projects` es el dueño de "quién ve un proyecto" y, con ello, de a quién se avisa de lo que pasa en
+él. `ProjectAudienceService.listTaskBlockAudience(tx, { organizationId, taskUpdateId })` es **la**
+definición, y la usan los dos procesos:
+
+- **La API**, en la transacción del bloqueo, con la identidad de quien bloquea.
+- **El worker**, con su transacción de sistema, sobre la fila de la bandeja.
+
+La audiencia son los miembros explícitos del proyecto (el creador incluido); si el proyecto es
+`site`, también los `manager` con acceso a ese sitio; y el responsable de la tarea; menos quien
+reportó el bloqueo. `owner` y `director` solo si son miembros explícitos: nunca por ser
+privilegiados, porque avisarle a quien no ve un proyecto reservado revelaría que existe. La
+función lee la novedad con `CollaborationService`, los managers del sitio y los miembros activos con
+`TenancyService`, y el resto (tarea, proyecto, `project_member`) con repositorios de `projects`. La
+regla que las combina es una función pura (`domain/task-block-audience.ts`). El rol `manager` se
+compara por valor completo: un miembro con varios roles queda afuera, el mismo lado seguro que
 `app_is_privileged()`.
 
-Tiene un test con la regla (proyecto reservado: un manager del sitio, un owner no miembro y un
-operario ajeno no reciben; un miembro explícito sí; y un owner que además es miembro explícito
-sí).
+Lee con la identidad de la `tx` que recibe, y eso es lo que hace segura la reutilización: RLS solo
+oculta filas, nunca las inventa, así que **lo que calcula la API es siempre un subconjunto de lo que
+calcula el worker**. Quien bloquea con acceso completo ve la audiencia entera y la avisa de
+inmediato; un operario "solo asignado" no ve `project_member`, avisa al responsable y a los
+managers del sitio, y el worker completa el resto. Como la `dedupe_key` del bloqueo es la misma
+desde ambos lados (`blockedDedupeKey`, en `packages/contracts`), nadie recibe dos avisos.
 
-### 6. RLS
+Tiene un test con la regla (proyecto reservado: un manager del sitio, un owner no miembro y un
+operario ajeno no reciben; un miembro explícito sí; y un owner que además es miembro explícito sí).
+
+### 6. RLS y permisos
 
 - **`notification` recibe las policies por proyecto** de `app_apply_project_policies()`, porque
   tiene `task_id` y `project_id`. No hizo falta ninguna columna nueva para que el operario "solo
@@ -120,18 +135,38 @@ sí).
   `session_user = 'app_worker'` con `app.scope = 'system'` y sin organización: es lo único que deja
   al worker encontrar trabajo de todas las organizaciones. Se escribió sin `app_is_privileged()`:
   su rama de `owner`/`director` dejaría a un dueño de una organización leer la bandeja de otra.
-  Está probado que ni declarar `app.scope = 'system'` desde `app_login` ni `app_worker` sin ese
-  alcance abren nada, y que el mismo alcance no abre ninguna otra tabla.
+- **Privilegios de `notification_outbox`:** `app_login` solo `INSERT`; `SELECT` y `UPDATE` solo para
+  `app_worker`; `DELETE` para nadie (regla dura 9). Se revocan a `app_user`, que es de donde los
+  heredaban los privilegios por defecto. La API no puede leer la bandeja ni marcar una fila como
+  procesada: una API comprometida no puede dejar sin aviso lo que el worker todavía no levantó. El
+  `INSERT ... ON CONFLICT DO NOTHING` (sin objetivo de conflicto) no necesita `SELECT`, así que la
+  API sigue encolando con idempotencia. Está probado con `app_login` (`42501` al leer, actualizar o
+  borrar) y con los privilegios de tabla exactos.
 
-### 7. Excepción deliberada a la regla dura 5
+### 7. El worker corre código de los módulos, pero solo lo que exportan
 
-El cálculo de la audiencia lee tablas de varios módulos (`task_update`, `task`, `project`,
-`project_member`, `member_site_access`, `auth.member`) con SQL crudo en `apps/worker`. La regla
-dura 5 es sobre módulos de la API, y `dependency-cruiser` la sigue haciendo cumplir allí; el
-worker es el proceso privilegiado y esa lectura es una proyección, no un servicio. La
-alternativa, pasar la audiencia por servicios exportados de cada módulo, no se puede: ejecutaría
-con la identidad de quien actúa, que es justo lo que no alcanza a ver. Queda escrita en un solo
-lugar (`notifications-outbox.ts`).
+El worker no tiene SQL propio sobre tablas ajenas. Orquesta servicios exportados, con su transacción
+de sistema: `NotificationsService` (la bandeja y los avisos), `ProjectAudienceService` (la
+audiencia), `CollaborationService` y `TenancyService` (de los que depende ese último). La regla
+dura 5 se cumple: un servicio exportado recibe el `tx`, así que corre con la identidad de quien lo
+llama, y el worker es `app_worker`.
+
+El acceso está cerrado en tres capas:
+
+1. **`@orq/api` cierra el paquete con `exports`**: un entry por archivo de módulo
+   (`@orq/api/collaboration`, `/notifications`, `/projects`, `/tenancy`), que es lo que CLAUDE.md §5
+   llama "lo exportado". Node rechaza cualquier otra ruta con `ERR_PACKAGE_PATH_NOT_EXPORTED`, un
+   internal incluido. Para que TypeScript lo vea, la API ahora emite declaraciones. Un test
+   (`api-exports-boundary.spec.ts`) lo verifica con el resolvedor de Node de verdad.
+2. **`dependency-cruiser`** (`worker-imports-only-exported-module-entries`): el worker solo puede
+   llegar a `apps/api/src/modules/<m>/<m>.module.ts`. Cubre el import relativo que se salte el
+   paquete, y la excepción a `no-app-to-app` queda acotada al worker. Cada entry declara además una
+   condición `source` (y `.dependency-cruiser.cjs` la pone primero en `conditionNames`): hace que el
+   import se resuelva al código fuente y no a `dist`, que la configuración excluye; sin eso la
+   arista no existiría y la regla quedaría muda en silencio. Verificado: un import relativo a un
+   interno del worker hace fallar la regla.
+3. **El costo en memoria es chico.** Medido en la imagen, bajo el límite de producción (256 MB): el
+   worker pasa de 77 MB a 99 MB con los cuatro módulos cargados.
 
 ### 8. Endpoints
 
@@ -153,17 +188,18 @@ antigüedad, intentos y último error) y aplica el mismo criterio.
 
 ## Consecuencias
 
-- Los avisos del responsable aparecen en la misma respuesta; los de la audiencia, a los pocos
-  segundos. Un worker caído demora los avisos de la audiencia, no los pierde.
-- **Una API comprometida podría marcar filas de la bandeja como procesadas** (la policy de
-  organización permite `UPDATE`). No se mitiga hoy: el daño es que no se envíen avisos, no que se
-  filtren datos. Se puede cerrar más adelante con permisos por columna.
-- Las migraciones con una FK hacia `task` declaran la FK dentro del `CREATE TABLE`. Desde la `0015`
-  un `ALTER TABLE ... ADD CONSTRAINT` falla con `42501`: el escaneo de validación lee `task` como
-  `app_owner`, bajo policies que llaman a funciones cuyo `EXECUTE` `app_owner` no tiene a
-  propósito. Vale para toda tabla futura (`attachment`, `task_acknowledgement`, ...).
-- La API no reintenta un aviso directo que falle: si el insert falla, falla la mutación entera.
-  Es la propiedad buscada.
+- Los avisos que la API alcanza a calcular aparecen en la misma respuesta; los del resto de la
+  audiencia, a los pocos segundos. Un worker caído demora los avisos de la audiencia, no los pierde.
+- Un solo cálculo de audiencia para dos procesos. Cambiar quién recibe un aviso de bloqueo es
+  tocar `ProjectAudienceService` y nada más.
+- `apps/worker` depende de `@orq/api`: el build del worker requiere el de la API (Turborepo ya lo
+  ordena por la dependencia de workspace), y la API emite declaraciones (`declaration: true`).
+- Las migraciones con una FK hacia `task` (o `project`, `project_member`) declaran la FK dentro del
+  `CREATE TABLE`. Está verificado y explicado en CLAUDE.md §6: desde la `0015`, `ALTER TABLE ... ADD
+  CONSTRAINT` falla con `42501` porque el dueño del esquema no tiene `EXECUTE` sobre las funciones
+  de las policies, y el `VALIDATE` de un `NOT VALID` falla igual.
+- La API no reintenta un aviso directo que falle: si el insert falla, falla la mutación entera. Es
+  la propiedad buscada.
 
 ## Alternativas descartadas
 
@@ -174,6 +210,8 @@ antigüedad, intentos y último error) y aplica el mismo criterio.
   `text`) y un paso manual de despliegue.
 - **Encolar en pg-boss desde la base:** ver el punto 3.
 - **Avisar solo a quien el actor ve:** no avisa nunca cuando bloquea un operario asignado.
+- **SQL propio en el worker para armar la audiencia:** descartado en la revisión. Duplicaba la
+  definición de "quién ve un proyecto" fuera del módulo que la posee.
 
 ## Pendiente
 

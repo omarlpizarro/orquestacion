@@ -59,3 +59,44 @@ export async function findActiveSiteIds(
   `);
   return result.rows.map((row) => row.id);
 }
+
+/**
+ * Los `manager` con acceso a un sitio. El rol se compara por su valor completo: un miembro con
+ * varios roles queda afuera, el mismo lado seguro que `app_is_privileged()` (menos acceso, y
+ * acá menos avisos). `auth.member` no tiene RLS (ADR-011): el `organization_id` de este `WHERE`
+ * es lo único que impide reconocer a un miembro de otro tenant.
+ */
+export async function findSiteManagerMemberIds(
+  tx: Tx,
+  params: { organizationId: string; siteId: string },
+): Promise<string[]> {
+  const result = await tx.execute<{ member_id: string }>(sql`
+    select a.member_id
+      from member_site_access a
+      join auth.member m on m.id = a.member_id and m.organization_id = a.organization_id
+     where a.organization_id = ${params.organizationId}
+       and a.site_id = ${params.siteId}
+       and m.role = 'manager'
+     order by a.member_id
+  `);
+  return result.rows.map((row) => row.member_id);
+}
+
+/**
+ * De estos ids, los que siguen siendo miembros de la organización. Mismo aviso que arriba sobre
+ * `auth.member` y el `WHERE` por organización.
+ */
+export async function findOrganizationMemberIds(
+  tx: Tx,
+  params: { organizationId: string; memberIds: string[] },
+): Promise<string[]> {
+  if (params.memberIds.length === 0) return [];
+  // `sql.param(array)`: drizzle expande un arreglo común en `(a, b, c)`, no en un parámetro.
+  const result = await tx.execute<{ id: string }>(sql`
+    select id from auth.member
+     where organization_id = ${params.organizationId}
+       and id = any(${sql.param(params.memberIds)}::text[])
+     order by id
+  `);
+  return result.rows.map((row) => row.id);
+}

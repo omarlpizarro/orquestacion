@@ -6,6 +6,10 @@ import { NotificationsService } from './notifications.service.js';
 vi.mock('./infrastructure/notification.repository.js', () => ({
   insertNotification: vi.fn().mockResolvedValue(undefined),
   insertOutboxEntry: vi.fn().mockResolvedValue(undefined),
+  findPendingOutboxEntries: vi.fn().mockResolvedValue([]),
+  claimOutboxEntry: vi.fn().mockResolvedValue(null),
+  markOutboxEntryProcessed: vi.fn().mockResolvedValue(undefined),
+  recordOutboxFailure: vi.fn().mockResolvedValue(1),
 }));
 
 const tx = {} as never;
@@ -72,46 +76,62 @@ describe('NotificationsService', () => {
     });
   });
 
-  describe('notifyTaskBlockedToAssignee', () => {
+  describe('notifyTaskBlocked', () => {
     const blocked = {
       ...base,
-      assigneeMemberId: 'member_responsable',
+      recipientMemberIds: ['member_a', 'member_b'],
       taskUpdateId: '01945f4e-0000-7000-8000-0000000000aa',
       reason: 'Falta el permiso municipal',
     };
 
-    it('avisa al responsable con el motivo y comparte la clave con el aviso del worker', async () => {
-      await service.notifyTaskBlockedToAssignee(tx, blocked);
+    it('crea un aviso por destinatario, con el motivo y la clave que comparte con el worker', async () => {
+      await service.notifyTaskBlocked(tx, blocked);
 
-      expect(insertNotification).toHaveBeenCalledWith(
-        tx,
-        expect.objectContaining({
-          recipientMemberId: 'member_responsable',
-          templateKey: 'task.blocked',
-          payload: {
-            task_title: 'Excavar',
-            actor_member_id: base.actorMemberId,
-            reason_preview: 'Falta el permiso municipal',
-          },
-          dedupeKey: blockedDedupeKey({
-            taskUpdateId: blocked.taskUpdateId,
-            recipientMemberId: 'member_responsable',
+      expect(insertNotification).toHaveBeenCalledTimes(2);
+      for (const recipientMemberId of ['member_a', 'member_b']) {
+        expect(insertNotification).toHaveBeenCalledWith(
+          tx,
+          expect.objectContaining({
+            recipientMemberId,
+            templateKey: 'task.blocked',
+            payload: {
+              task_title: 'Excavar',
+              actor_member_id: base.actorMemberId,
+              reason_preview: 'Falta el permiso municipal',
+            },
+            dedupeKey: blockedDedupeKey({ taskUpdateId: blocked.taskUpdateId, recipientMemberId }),
           }),
-        }),
-      );
+        );
+      }
     });
 
-    it('no avisa al responsable si es quien bloqueó', async () => {
-      await service.notifyTaskBlockedToAssignee(tx, {
+    it('no avisa a quien bloqueó aunque venga en la lista', async () => {
+      await service.notifyTaskBlocked(tx, {
         ...blocked,
-        assigneeMemberId: base.actorMemberId,
+        recipientMemberIds: [base.actorMemberId, 'member_a'],
       });
+
+      const recipients = vi
+        .mocked(insertNotification)
+        .mock.calls.map((c) => c[1].recipientMemberId);
+      expect(recipients).toEqual(['member_a']);
+    });
+
+    it('sin destinatarios no escribe nada', async () => {
+      await service.notifyTaskBlocked(tx, { ...blocked, recipientMemberIds: [] });
 
       expect(insertNotification).not.toHaveBeenCalled();
     });
 
+    it('sin motivo no lleva extracto', async () => {
+      await service.notifyTaskBlocked(tx, { ...blocked, reason: null });
+
+      const payload = vi.mocked(insertNotification).mock.calls[0]?.[1].payload;
+      expect(payload).toEqual({ task_title: 'Excavar', actor_member_id: base.actorMemberId });
+    });
+
     it('recorta un motivo largo en el extracto', async () => {
-      await service.notifyTaskBlockedToAssignee(tx, { ...blocked, reason: 'x'.repeat(500) });
+      await service.notifyTaskBlocked(tx, { ...blocked, reason: 'x'.repeat(500) });
 
       const payload = vi.mocked(insertNotification).mock.calls[0]?.[1].payload;
       expect(payload?.reason_preview?.length).toBeLessThanOrEqual(REASON_PREVIEW_MAX_LENGTH);

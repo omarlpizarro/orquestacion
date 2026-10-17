@@ -96,3 +96,14 @@ CREATE POLICY "notification_recipient_update" ON "notification" AS RESTRICTIVE F
 -- de una transacción de sistema de SU organización, bajo la policy de organización.
 CREATE POLICY "notification_outbox_system_scan" ON "notification_outbox" AS PERMISSIVE FOR SELECT
   USING (nullif(current_setting('app.scope', true), '') = 'system' AND session_user = 'app_worker');
+--> statement-breakpoint
+
+-- notification_outbox: permisos mínimos. La API (app_login) solo ENCOLA: INSERT, sin leer ni tocar lo
+-- encolado. Leer los pendientes y marcarlos procesados es del worker (app_worker): SELECT y UPDATE.
+-- Nadie borra (regla dura 9). Los privilegios por defecto de 0001 le dan SELECT, INSERT, UPDATE y
+-- DELETE a app_user, que heredan app_login y app_worker; acá se revocan los que sobran. Sin esto,
+-- una API comprometida podría marcar como procesadas las filas que el worker todavía no levantó (la
+-- policy de organización lo permitiría) y nadie sería avisado. `INSERT ... ON CONFLICT DO NOTHING`
+-- sin objetivo de conflicto no pide SELECT, así que la API sigue pudiendo encolar con idempotencia.
+REVOKE SELECT, UPDATE, DELETE ON "notification_outbox" FROM app_user;--> statement-breakpoint
+GRANT SELECT, UPDATE ON "notification_outbox" TO app_worker;
