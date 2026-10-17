@@ -368,13 +368,14 @@ export async function lockTaskSubtree(
 
 /**
  * Borra (lógicamente, regla dura 9) la tarea y todas sus descendientes vivas con el
- * mismo `deleted_at` (`now()` es el de la transacción). Devuelve cuántas y cuándo.
+ * mismo `deleted_at` (`now()` es el de la transacción). Devuelve cuántas, cuántas tenían
+ * responsable y cuándo.
  */
 export async function softDeleteTaskSubtree(
   tx: Tx,
   params: { organizationId: string; taskId: string },
-): Promise<{ count: number; deletedAt: string }> {
-  const result = await tx.execute<{ deleted_at: string }>(sql`
+): Promise<{ count: number; assignedCount: number; deletedAt: string }> {
+  const result = await tx.execute<{ deleted_at: string; assignee_member_id: string | null }>(sql`
     update task t
        set deleted_at = now()
      where t.organization_id = ${params.organizationId}
@@ -382,11 +383,15 @@ export async function softDeleteTaskSubtree(
        and t.path <@ (select root.path from task root
                        where root.id = ${params.taskId}
                          and root.organization_id = ${params.organizationId})
-    returning t.deleted_at
+    returning t.deleted_at, t.assignee_member_id
   `);
   const first = result.rows[0];
   if (!first) throw new Error('softDeleteTaskSubtree no borró ninguna fila');
-  return { count: result.rows.length, deletedAt: toIso(first.deleted_at) };
+  return {
+    count: result.rows.length,
+    assignedCount: result.rows.filter((row) => row.assignee_member_id !== null).length,
+    deletedAt: toIso(first.deleted_at),
+  };
 }
 
 /**
@@ -398,19 +403,28 @@ export async function softDeleteTaskSubtree(
 export async function findDeletedTaskSummary(
   tx: Tx,
   params: { organizationId: string; taskId: string },
-): Promise<{ deletedAt: string; count: number } | null> {
-  const result = await tx.execute<{ deleted_at: string | null; count: number }>(sql`
+): Promise<{ deletedAt: string; count: number; assignedCount: number } | null> {
+  const result = await tx.execute<{
+    deleted_at: string | null;
+    count: number;
+    assigned_count: number;
+  }>(sql`
     select root.deleted_at,
            (select count(*)::int from task t
              where t.organization_id = root.organization_id
                and t.path <@ root.path
-               and t.deleted_at = root.deleted_at) as count
+               and t.deleted_at = root.deleted_at) as count,
+           (select count(*)::int from task t
+             where t.organization_id = root.organization_id
+               and t.path <@ root.path
+               and t.deleted_at = root.deleted_at
+               and t.assignee_member_id is not null) as assigned_count
       from task root
      where root.id = ${params.taskId} and root.organization_id = ${params.organizationId}
   `);
   const row = result.rows[0];
   if (!row?.deleted_at) return null;
-  return { deletedAt: toIso(row.deleted_at), count: row.count };
+  return { deletedAt: toIso(row.deleted_at), count: row.count, assignedCount: row.assigned_count };
 }
 
 export interface FindMyDayTaskRowsParams {

@@ -70,6 +70,7 @@ describe('DeleteTaskHandler', () => {
     ]);
     vi.mocked(softDeleteTaskSubtree).mockResolvedValue({
       count: 3,
+      assignedCount: 2,
       deletedAt: '2026-10-14T12:00:00.000Z',
     });
   });
@@ -102,6 +103,7 @@ describe('DeleteTaskHandler', () => {
       id: command.id,
       deleted_at: '2026-10-14T12:00:00.000Z',
       deleted_task_count: 3,
+      assigned_task_count: 2,
     });
     const order = (fn: unknown) => vi.mocked(fn as () => void).mock.invocationCallOrder[0] ?? 0;
     expect(order(lockTaskSubtree)).toBeLessThan(order(softDeleteTaskSubtree));
@@ -215,6 +217,7 @@ describe('DeleteTaskHandler', () => {
       vi.mocked(findDeletedTaskSummary).mockResolvedValue({
         deletedAt: '2026-10-14T12:00:00.000Z',
         count: 3,
+        assignedCount: 2,
       });
       const listener = vi.fn();
       domainEvents.onEvent('task.deleted', listener);
@@ -226,6 +229,7 @@ describe('DeleteTaskHandler', () => {
         id: command.id,
         deleted_at: '2026-10-14T12:00:00.000Z',
         deleted_task_count: 3,
+        assigned_task_count: 2,
       });
       expect(hasFullAccess).not.toHaveBeenCalled();
       expect(softDeleteTaskSubtree).not.toHaveBeenCalled();

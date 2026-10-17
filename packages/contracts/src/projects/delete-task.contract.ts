@@ -20,6 +20,8 @@ export const deleteTaskOutputSchema = z.object({
   deleted_at: z.iso.datetime(),
   // Cuántas tareas se borraron: la tarea y todas sus subtareas.
   deleted_task_count: z.int().min(1),
+  // Cuántas de ellas tenían responsable: esas personas dejan de verlas en Mi Día.
+  assigned_task_count: z.int().min(0),
 });
 export type DeleteTaskOutput = z.infer<typeof deleteTaskOutputSchema>;
 

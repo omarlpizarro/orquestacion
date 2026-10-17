@@ -86,6 +86,7 @@ export class DeleteTaskHandler {
           id: command.id,
           deleted_at: summary.deletedAt,
           deleted_task_count: summary.count,
+          assigned_task_count: summary.assignedCount,
         },
         projectId: null,
       };
@@ -119,13 +120,18 @@ export class DeleteTaskHandler {
       throw new TaskVersionMismatchError(command.id, command.expected_version);
     }
 
-    const { count, deletedAt } = await softDeleteTaskSubtree(tx, {
+    const { count, assignedCount, deletedAt } = await softDeleteTaskSubtree(tx, {
       organizationId,
       taskId: command.id,
     });
 
     return {
-      output: { id: command.id, deleted_at: deletedAt, deleted_task_count: count },
+      output: {
+        id: command.id,
+        deleted_at: deletedAt,
+        deleted_task_count: count,
+        assigned_task_count: assignedCount,
+      },
       projectId: current.projectId,
     };
   }

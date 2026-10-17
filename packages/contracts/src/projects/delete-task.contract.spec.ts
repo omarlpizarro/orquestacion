@@ -40,10 +40,14 @@ describe('deleteTaskOutputSchema', () => {
       id: valid.id,
       deleted_at: '2026-10-14T12:00:00.000Z',
       deleted_task_count: 3,
+      assigned_task_count: 2,
     };
 
     expect(deleteTaskOutputSchema.safeParse(output).success).toBe(true);
     expect(deleteTaskOutputSchema.safeParse({ ...output, deleted_task_count: 0 }).success).toBe(
+      false,
+    );
+    expect(deleteTaskOutputSchema.safeParse({ ...output, assigned_task_count: -1 }).success).toBe(
       false,
     );
   });

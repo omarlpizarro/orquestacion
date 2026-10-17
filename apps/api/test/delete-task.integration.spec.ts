@@ -206,6 +206,23 @@ describe('DELETE /projects/tasks/{id} (integración)', () => {
       );
     });
 
+    it('informa cuántas de las tareas borradas tenían responsable, y un reintento responde lo mismo', async () => {
+      const root = await createTask(openProjectId, { assignee_member_id: operatorA.memberId });
+      await createTask(openProjectId, { parent_task_id: root.id });
+      await createTask(openProjectId, {
+        parent_task_id: root.id,
+        assignee_member_id: operatorA.memberId,
+      });
+      const payload = { client_mutation_id: newId(), expected_version: root.version };
+      const url = `/projects/tasks/${root.id}`;
+
+      const first = await call(owner.cookie, 'DELETE', url, payload);
+      const retry = await call(owner.cookie, 'DELETE', url, payload);
+
+      expect(first.json()).toMatchObject({ deleted_task_count: 3, assigned_task_count: 2 });
+      expect(retry.json()).toEqual(first.json());
+    });
+
     it('borrar una subtarea no toca a su padre ni a sus hermanas', async () => {
       const { root, a, a1, b } = await createTree(openProjectId);
 
