@@ -80,7 +80,34 @@ Rigen también para `app_owner`: una migración futura no puede crear particione
 Conserva `SECURITY DEFINER`, `SET search_path = pg_catalog, public, pg_temp` y los nombres
 calificados (CLAUDE.md §6).
 
-### 5. El `EXECUTE` de `app_worker` va en una migración, no en `ensure-roles.sql`
+### 5. Sin locks fuertes en el día a día
+
+`app_ensure_audit_partitions` terminaba llamando a `app_apply_tenant_policies()`, que hace
+`ALTER TABLE ... ENABLE/FORCE ROW LEVEL SECURITY` sobre **todas** las tablas de negocio en cada
+llamada, aunque ya estuvieran así, y repetía el `REVOKE` de cada partición. `ALTER TABLE` toma
+`ACCESS EXCLUSIVE` aunque no cambie nada. Eso era inocuo mientras solo corría en migraciones; con
+un job diario, una transacción larga abierta sobre `task`, `project` o cualquier otra dejaba al
+job encolado y bloqueaba todo lo que llegara detrás. **Verificado con `pg_locks`** antes de
+arreglarlo: cada corrida tomaba `AccessExclusiveLock` sobre las 9 tablas de negocio y
+todas las tablas del audit.
+
+La `0020` lo corrige en tres puntos:
+
+- `app_apply_tenant_policies()` solo hace el `ALTER` si `relrowsecurity` o
+  `relforcerowsecurity` están en falso (una tabla nueva sigue recibiendo los dos).
+- `app_ensure_audit_partitions` mira el catálogo con `to_regclass` (sin locks) y crea,
+  revoca y aplica policies **solo si creó alguna partición**. Un día sin particiones nuevas no
+  toma ningún lock fuerte.
+- El job fija `lock_timeout` en 5 segundos dentro de su transacción (`set_config(..., true)`:
+  no queda pegado a la conexión). Si el día en que sí hay que crear una partición no consigue el
+  lock, falla con `55P03` y pg-boss reintenta, en lugar de bloquear a los demás.
+
+Tests: con `pg_locks`, una segunda corrida no toma ningún `AccessExclusiveLock` y una que crea
+una partición solo bloquea tablas del audit; en el worker, con una transacción larga abierta
+sobre `task`, `project` y `audit_log`, una corrida sin nada que crear no espera, y una que
+tiene que crear una falla en el tiempo fijado sin crear nada.
+
+### 6. El `EXECUTE` de `app_worker` va en una migración, no en `ensure-roles.sql`
 
 `GRANT EXECUTE ON FUNCTION public.app_ensure_audit_partitions(date, integer) TO app_worker` va
 en la `0020`. `ensure-roles.sql` corre **antes** de las migraciones (en un volumen nuevo y en
@@ -93,7 +120,7 @@ funciones que pasan a ser de `app_rls_helper` (el único rol con `BYPASSRLS`);
 `app_ensure_audit_partitions` es de `app_owner` y no necesita `BYPASSRLS`. Sumarla a la lista
 ampliaría ese rol sin motivo.
 
-### 6. El worker en `compose.server.yml`
+### 7. El worker en `compose.server.yml`
 
 Servicio `worker`, misma imagen que la API con otro comando (`node dist/main.js` desde
 `/repo/apps/worker`), que conecta como `app_worker` y solo recibe `DATABASE_WORKER_URL`.
@@ -102,7 +129,7 @@ Servicio `worker`, misma imagen que la API con otro comando (`node dist/main.js`
 `cap_drop: [ALL]`, `no-new-privileges`, sin puertos. Sin healthcheck a propósito: no escucha
 en ningún puerto, y un healthcheck inventado diría "sano" sin saberlo. La señal real es el job.
 
-### 7. Cómo se ve que anda
+### 8. Cómo se ve que anda
 
 - `scripts/deploy.sh` suma un paso 6, después de las migraciones y de reiniciar la API:
   `up -d --wait worker`. El orden importa: el worker necesita el esquema `pgboss` y el

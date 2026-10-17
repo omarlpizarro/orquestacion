@@ -103,6 +103,48 @@ describe('app_ensure_audit_partitions: permiso de app_worker y guardas (0020)', 
     });
   });
 
+  describe('locks de una corrida sin nada que crear (el job corre todos los días)', () => {
+    /** Tablas públicas sobre las que la transacción abierta tiene `AccessExclusiveLock`. */
+    const exclusiveLocksTaken = async (pool: PostgresHarness['workerPool'], months: number) => {
+      const client = await pool.connect();
+      try {
+        await client.query('begin');
+        await client.query(
+          `select app_ensure_audit_partitions((now() at time zone 'UTC')::date, ${months})`,
+        );
+        const { rows } = await client.query<{ relname: string }>(`
+          select c.relname
+            from pg_locks l
+            join pg_class c on c.oid = l.relation
+            join pg_namespace n on n.oid = c.relnamespace and n.nspname = 'public'
+           where l.pid = pg_backend_pid() and l.mode = 'AccessExclusiveLock' and c.relkind in ('r', 'p')
+           order by 1`);
+        await client.query('rollback');
+        return rows.map((row) => row.relname);
+      } finally {
+        client.release();
+      }
+    };
+
+    it('la segunda corrida, sin nada que crear, no toma ningún AccessExclusiveLock', async () => {
+      await callAsWorker(today, '13');
+      expect(await exclusiveLocksTaken(harness.workerPool, 13)).toEqual([]);
+    });
+
+    it('una corrida que sí crea una partición bloquea solo las tablas del audit, nunca las de negocio', async () => {
+      // El primer test de este archivo ya dejó las 24 particiones: se borra la última para
+      // que esta corrida tenga algo que crear.
+      const { rows } = await harness.superuserPool.query<{ name: string }>(
+        "select 'audit_log_' || to_char(date_trunc('month', now() at time zone 'UTC') + interval '23 months', 'YYYY_MM') as name",
+      );
+      await harness.superuserPool.query(`drop table public.${rows[0]?.name ?? ''}`);
+
+      const locked = await exclusiveLocksTaken(harness.workerPool, 24);
+      expect(locked.length).toBeGreaterThan(0);
+      expect(locked.filter((name) => !name.startsWith('audit_log'))).toEqual([]);
+    });
+  });
+
   it('el borde del rango, un mes atrás y un mes adelante, es válido', async () => {
     await callAsWorker(`(${today} - interval '1 month')::date`, '1');
     await callAsWorker(`(${today} + interval '1 month')::date`, '1');

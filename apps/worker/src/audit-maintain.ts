@@ -8,6 +8,14 @@ export const AUDIT_MAINTAIN_QUEUE = 'audit.maintain';
 export const AUDIT_PARTITIONS_AHEAD_MONTHS = 13;
 
 /**
+ * Cuánto espera el job por un lock antes de rendirse. Si hay una transacción larga abierta
+ * sobre alguna tabla que necesita bloquear, falla (55P03) y pg-boss reintenta, en lugar de
+ * quedar encolado y bloquear todo lo que llegue detrás. Un día sin particiones por crear no
+ * toma ningún lock fuerte (migración 0020); esto cubre el día en que sí hay que crear una.
+ */
+export const AUDIT_LOCK_TIMEOUT_MS = 5_000;
+
+/**
  * Umbral de retención del audit (ADR-018). Solo informa: pasado el umbral la política
  * futura es archivar (DETACH, exportar, verificar, DROP), no borrar, y no existe todavía.
  * Este job no toca ninguna partición vieja.
@@ -48,7 +56,8 @@ export function summarizeAuditPartitions(
  * Asegura las particiones mensuales de `audit_log`. Idempotente: se puede correr todos
  * los días. Si la partición `DEFAULT` ya tiene filas de un mes por crear, Postgres
  * rechaza la creación (`23514`) y el job falla fuerte, a propósito: es una falla que una
- * persona tiene que mirar, no algo para arreglar solo (ADR-018).
+ * persona tiene que mirar, no algo para arreglar solo (ADR-018). Si no consigue un lock en
+ * `lockTimeoutMs`, falla y pg-boss reintenta.
  *
  * Corre sin tenant: la función es SECURITY DEFINER del dueño y no lee filas de negocio.
  * Las particiones se leen del catálogo, que no tiene RLS.
@@ -56,9 +65,12 @@ export function summarizeAuditPartitions(
 export async function maintainAuditPartitions(
   db: Db,
   requestId: string,
-  now: Date = new Date(),
+  options: { now?: Date; lockTimeoutMs?: number } = {},
 ): Promise<AuditPartitionSummary> {
+  const { now = new Date(), lockTimeoutMs = AUDIT_LOCK_TIMEOUT_MS } = options;
   const names = await withoutTenantTransaction(db, { requestId }, async (tx) => {
+    // `is_local = true`: vale solo para esta transacción y no queda pegado a la conexión.
+    await tx.execute(sql`select set_config('lock_timeout', ${`${lockTimeoutMs}ms`}, true)`);
     await tx.execute(
       sql`select public.app_ensure_audit_partitions((now() at time zone 'UTC')::date, ${AUDIT_PARTITIONS_AHEAD_MONTHS})`,
     );

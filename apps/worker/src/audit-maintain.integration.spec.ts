@@ -67,6 +67,59 @@ describe('audit.maintain', () => {
     ).rejects.toMatchObject({ code: '23514' });
   });
 
+  describe('locks', () => {
+    /** Abre una sesión aparte que toma los locks pedidos y los mantiene hasta `release()`. */
+    async function holdLocks(statements: string[]) {
+      const client = await harness.superuserPool.connect();
+      await client.query('begin');
+      for (const statement of statements) await client.query(statement);
+      return async () => {
+        await client.query('rollback');
+        client.release();
+      };
+    }
+
+    it('con una transacción larga abierta sobre tablas de negocio y del audit, una corrida sin nada que crear no espera', async () => {
+      const release = await holdLocks([
+        'lock table task in access share mode',
+        'lock table project in access share mode',
+        'lock table audit_log in access share mode',
+      ]);
+      try {
+        const started = Date.now();
+        const summary = await maintainAuditPartitions(db(), crypto.randomUUID());
+        expect(summary.monthsAhead).toBe(12);
+        expect(Date.now() - started).toBeLessThan(3_000);
+      } finally {
+        await release();
+      }
+    });
+
+    it('si hay una partición que crear y no consigue el lock en lockTimeoutMs, falla (55P03) sin crear nada; liberado el lock, la crea', async () => {
+      const { rows } = await harness.superuserPool.query<{ name: string }>(
+        "select 'audit_log_' || to_char(date_trunc('month', now() at time zone 'UTC') + interval '12 months', 'YYYY_MM') as name",
+      );
+      const lastPartition = rows[0]?.name ?? '';
+      await harness.superuserPool.query(`drop table public.${lastPartition}`);
+      const before = await partitionCount();
+
+      const release = await holdLocks(['lock table audit_log in access share mode']);
+      try {
+        const started = Date.now();
+        await expect(
+          maintainAuditPartitions(db(), crypto.randomUUID(), { lockTimeoutMs: 500 }),
+        ).rejects.toMatchObject({ cause: { code: '55P03' } });
+        expect(Date.now() - started).toBeLessThan(5_000);
+        expect(await partitionCount()).toBe(before);
+      } finally {
+        await release();
+      }
+
+      await maintainAuditPartitions(db(), crypto.randomUUID());
+      expect(await partitionCount()).toBe(before + 1);
+    });
+  });
+
   it('registrado en pg-boss: la cola corre, queda completada y hay un cron diario', async () => {
     const boss = new PgBoss({
       connectionString: harness.workerConnectionUri,
