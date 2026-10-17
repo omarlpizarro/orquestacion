@@ -425,10 +425,12 @@ describe('aislamiento por proyecto (ADR-017)', () => {
     });
 
     it('una partición nueva de audit_log nace con la policy (app_ensure_audit_partitions)', async () => {
-      await harness.ownerDb.execute(sql`select app_ensure_audit_partitions('2099-03-01', 1)`);
+      // 24 meses desde hoy: llega más allá de los 13 que crea la 0012, así que hay una nueva.
+      await harness.ownerDb.execute(sql`select app_ensure_audit_partitions(current_date, 24)`);
       const result = await harness.ownerDb.execute<{ cmd: string }>(sql`
         select cmd from pg_policies
-         where tablename = 'audit_log_2099_03' and permissive = 'RESTRICTIVE'
+         where tablename = 'audit_log_' || to_char(date_trunc('month', now() at time zone 'UTC') + interval '23 months', 'YYYY_MM')
+           and permissive = 'RESTRICTIVE'
       `);
       expect(result.rows.map((row) => row.cmd)).toEqual(['SELECT']);
     });

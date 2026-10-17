@@ -880,7 +880,7 @@ Regla general: todo índice de una tabla de negocio arranca con `organization_id
 
 ### Particionado
 
-Solo `audit_log`, por rango mensual sobre `created_at`. Es la única tabla que crece de forma no acotada por diseño y cuyo patrón de consulta es casi siempre reciente. Un job mensual crea la partición siguiente y desprende las que superan la retención. Hasta que ese job exista (paso 8 del brief), `0012` crea las particiones del mes actual y de los doce siguientes más una `DEFAULT`, con `app_ensure_audit_partitions(desde, meses)` (idempotente, la usará el job). **Postgres no deja crear la partición de un mes si la `DEFAULT` ya tiene filas de ese mes** (error `23514`, verificado con un test): el job tiene que sacar esas filas de la `DEFAULT`, crear la partición y reinsertarlas.
+Solo `audit_log`, por rango mensual sobre `created_at`. Es la única tabla que crece de forma no acotada por diseño y cuyo patrón de consulta es casi siempre reciente. La `0012` crea las particiones del mes actual y de los doce siguientes más una `DEFAULT`, con `app_ensure_audit_partitions(desde, meses)`, que es idempotente. Desde ADR-018 un job diario del worker (`audit.maintain`) la llama para mantener unos doce meses por delante; la `0020` le agrega guardas (`p_months` entre 1 y 24, `p_from` a un mes o menos de hoy) y se la otorga a `app_worker`. **Postgres no deja crear la partición de un mes si la `DEFAULT` ya tiene filas de ese mes** (error `23514`, verificado con un test): el job no las mueve, falla fuerte y lo resuelve una persona (ADR-018, punto 2). La retención es **una sola para todas las organizaciones** (la partición es global): `AUDIT_RETENTION_MONTHS = 60` en código, solo como umbral que el job informa en el log. No se desprende ni se borra nada todavía; pasado el umbral la política futura es archivar (`DETACH`, exportar, verificar, `DROP`), en su propio ADR cuando existan backups con restore probado y object storage.
 
 El resto no se particiona. Con decenas de tenants y miles de tareas por tenant, Postgres no necesita ayuda; particionar antes de tiempo complica las claves foráneas y las migraciones sin ganancia medible.
 
@@ -1017,17 +1017,18 @@ slices siguientes contra una conexión que en los hechos ignora las policies.
 | `0017` | `task_update_body_required_not_valid` | `CHECK (kind NOT IN ('comment','block_report','reopen') OR (body IS NOT NULL AND body ~ '[^[:space:]]'))` sobre `task_update`, agregado `NOT VALID` (CLAUDE.md §6): rige para toda fila nueva. Su `VALIDATE CONSTRAINT` es una migración aparte, en un despliegue posterior | Hecha |
 | `0018` | `validate_task_update_body_required` | `VALIDATE CONSTRAINT task_update_body_required_check`: segundo paso de la `0017`, en un despliegue posterior (CLAUDE.md §6). No bloquea lecturas ni escrituras | Hecha |
 | `0019` | `audit_task` | Trigger `task_audit` (`AFTER INSERT OR UPDATE OR DELETE`, por fila, `audit_trigger()` de la `0012`) sobre `task`. La entrada lleva el `project_id` de la tarea, así que se lee con acceso completo al proyecto. Solo registra desde acá: las tareas que ya existían no tienen entrada de alta | Hecha |
-| `0020` | `templates` | `sop_template`, `sop_template_task` | Pendiente |
-| `0021` | `custom_fields` | `custom_field_definition`, índices GIN | Pendiente |
-| `0022` | `resources` | `resource`, `resource_booking` con la exclusion constraint | Pendiente |
-| `0023` | `dependencies` | `task_dependency`, función anti-ciclos, `schedule_change` | Pendiente |
-| `0024` | `collaboration` (resto) | `attachment`, `task_acknowledgement` | Pendiente |
-| `0025` | `audit` | Resto del audit trail del paso 8: triggers de las demás tablas (`task` ya está desde la `0019`), job de particiones y retención. `audit_log` y `audit_trigger()` ya existen desde `0012` | Pendiente |
-| `0026` | `notifications` | `notification`, `notification_preference`, `escalation_policy` | Pendiente |
-| `0027` | `sync` | Publicación lógica, `wal_level` (ya no `mutation_log`, adelantada a `0004`) | Pendiente |
-| `0028` | `billing` | `plan`, `subscription`, `payment_event`, `usage_counter` | Pendiente |
-| `0029` | `analytics` | `project_kpi` materializada y su job de refresco | Pendiente |
-| `0030` | `seed` | Planes, plantillas SOP por industria, catálogos iniciales | Pendiente |
+| `0020` | `audit_partitions_guards` | ADR-018: `app_ensure_audit_partitions` valida `p_months` entre 1 y 24 y `p_from` a un mes o menos de hoy (`22023`, sin crear nada) y se le otorga `EXECUTE` a `app_worker`, para el job de particiones. Mismo cuerpo, `SECURITY DEFINER` y `search_path` de siempre. Compatible hacia atrás: la `0012` la llama dentro del rango | Hecha |
+| `0021` | `templates` | `sop_template`, `sop_template_task` | Pendiente |
+| `0022` | `custom_fields` | `custom_field_definition`, índices GIN | Pendiente |
+| `0023` | `resources` | `resource`, `resource_booking` con la exclusion constraint | Pendiente |
+| `0024` | `dependencies` | `task_dependency`, función anti-ciclos, `schedule_change` | Pendiente |
+| `0025` | `collaboration` (resto) | `attachment`, `task_acknowledgement` | Pendiente |
+| `0026` | `audit` | Resto del audit trail del paso 8: triggers de las demás tablas (`task` ya está desde la `0019`; el job de particiones y la retención son ADR-018 y la `0020`). `audit_log` y `audit_trigger()` ya existen desde `0012` | Pendiente |
+| `0027` | `notifications` | `notification`, `notification_preference`, `escalation_policy` | Pendiente |
+| `0028` | `sync` | Publicación lógica, `wal_level` (ya no `mutation_log`, adelantada a `0004`) | Pendiente |
+| `0029` | `billing` | `plan`, `subscription`, `payment_event`, `usage_counter` | Pendiente |
+| `0030` | `analytics` | `project_kpi` materializada y su job de refresco | Pendiente |
+| `0031` | `seed` | Planes, plantillas SOP por industria, catálogos iniciales | Pendiente |
 
 `0009`/`0010` (site_id obligatorio, ADR-013) no estaban en el plan original — se adelantan por la misma razón que `mutation_log` y `task_update`: el alcance por sitio, que sigue en fase 2, necesita la columna cerrada primero. Corrieron ellas dos en el lugar de `templates`/`custom_fields`, que se corren un lugar cada una. `0016` (adenda del ADR-017) y `0017` (el `CHECK` de `body`) corren una cada una. Desde acá los números de las pendientes son orientativos: el número real lo da el orden en que se mergean.
 
@@ -1042,7 +1043,7 @@ Esta lista se mantiene igual en `CLAUDE.md` §13; si las dos alguna vez difieren
 1. ~~**Profundidad de subtareas.**~~ **Cerrada en fase 2 (ADR-006).** Se mantiene `ltree` (profundidad libre en el esquema); el dominio limita a tres niveles con una constante, no con un `CHECK`. Ver la nota en la sección de `task` más arriba.
 2. **Recursos con capacidad.** Hoy cada unidad física es un recurso. Si aparece un caso real de recurso agrupado (cinco camas, veinte cascos), habría que revisar, porque la exclusion constraint no lo modela.
 3. **Reservas sin conexión.** El esquema las permite como `tentative`. La alternativa es prohibir reservar offline, que es más simple y menos útil.
-4. **Retención del audit log.** La partición mensual necesita un número. Doce meses cubre la mayoría de los casos; salud y minería pueden requerir más por normativa.
+4. ~~Retención del audit log.~~ **Cerrada parcialmente en ADR-018:** umbral de 60 meses en código (`AUDIT_RETENTION_MONTHS`), solo informativo; no se borra nada. Sigue abierto el archivado (ADR propio) y la pregunta a un asesor legal sobre salud antes del primer cliente de ese sector.
 5. ~~**Sitios obligatorios u opcionales.**~~ **Cerrada e implementada en fase 2 (ADR-013), migraciones `0009`/`0010`.** `project.site_id` es `NOT NULL`; al crear una organización se crea un `site` por defecto (`organizationHooks.afterCreateOrganization` de better-auth). El fallback de zona horaria de ADR-008 (`organization_profile.timezone` cuando `site_id` es null) queda como defensa, no como caso de negocio esperado.
 6. **Idempotencia de mutaciones con payload distinto bajo el mismo `client_mutation_id`.** Hoy `mutation_log` no guarda un hash del request, así que un reintento con el mismo `client_mutation_id` pero datos distintos devuelve el resultado anterior en silencio, sin avisar del mismatch. Falta decidir si eso alcanza (es la semántica que ADR-007 ya documenta) o si hace falta guardar un hash del payload y rechazar el reintento si no coincide.
 7. **`task_update.created_by_member_id` para entradas de tipo `system`.** La columna es `NOT NULL` como en cualquier tabla de negocio, pero un `task_update` generado por un proceso automático (por ejemplo, la reprogramación en cascada de fase 5) no tiene un miembro humano detrás. Ninguna funcionalidad de fase 2 escribe ese tipo de fila, así que queda diferido: definir un miembro de sistema reservado, o relajar la columna a nulable para ese caso, cuando se implemente la fase que de verdad lo necesita.
