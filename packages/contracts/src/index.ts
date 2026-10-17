@@ -7,6 +7,7 @@ import { changeProjectVisibilityContract } from './projects/change-project-visib
 import { changeTaskStatusContract } from './projects/change-task-status.contract.js';
 import { createProjectContract } from './projects/create-project.contract.js';
 import { createTaskContract } from './projects/create-task.contract.js';
+import { deleteTaskContract } from './projects/delete-task.contract.js';
 import { getProjectContract } from './projects/get-project.contract.js';
 import { getTaskContract } from './projects/get-task.contract.js';
 import { listProjectTasksContract } from './projects/list-project-tasks.contract.js';
@@ -29,6 +30,7 @@ export const contract = populateContractRouterPaths({
     addTaskComment: addTaskCommentContract,
     updateTask: updateTaskContract,
     assignTask: assignTaskContract,
+    deleteTask: deleteTaskContract,
     listProjectTasks: listProjectTasksContract,
     changeProjectVisibility: changeProjectVisibilityContract,
     addProjectMember: addProjectMemberContract,
@@ -87,6 +89,13 @@ export {
   taskOutputSchema,
   taskStatusSchema,
 } from './projects/create-task.contract.js';
+export {
+  type DeleteTaskInput,
+  type DeleteTaskOutput,
+  deleteTaskContract,
+  deleteTaskInputSchema,
+  deleteTaskOutputSchema,
+} from './projects/delete-task.contract.js';
 export {
   type GetProjectInput,
   getProjectContract,

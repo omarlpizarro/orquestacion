@@ -24,6 +24,15 @@ export interface DomainEventMap {
     projectId: string;
     requestId: string;
   };
+  'task.deleted': {
+    /** La tarea que se pidió borrar; las subtareas se borran con ella. */
+    taskId: string;
+    organizationId: string;
+    projectId: string;
+    deletedTaskCount: number;
+    deletedByMemberId: string;
+    requestId: string;
+  };
   'task.assigned': {
     taskId: string;
     organizationId: string;

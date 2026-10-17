@@ -66,3 +66,12 @@ describe('hasCapability: task:assign', () => {
     expect(hasCapability('operator', { task: ['assign'] })).toBe(false);
   });
 });
+
+describe('hasCapability: task:delete', () => {
+  it('owner, director y manager borran tareas; operator no', () => {
+    expect(hasCapability('owner', { task: ['delete'] })).toBe(true);
+    expect(hasCapability('director', { task: ['delete'] })).toBe(true);
+    expect(hasCapability('manager', { task: ['delete'] })).toBe(true);
+    expect(hasCapability('operator', { task: ['delete'] })).toBe(false);
+  });
+});
