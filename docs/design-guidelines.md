@@ -41,7 +41,8 @@ escribe un hexadecimal suelto en un componente.**
 | `bg` | `#F5F5F6` | `#101114` | Fondo de pantalla |
 | `surface` | `#FFFFFF` | `#191B20` | Tarjetas, barras, hojas |
 | `surface-2` | `#EEEFF1` | `#22252B` | Fondos sutiles, filas alternas, presionado |
-| `border` | `#DCDDE1` | `#2B2E36` | Bordes de 1 px |
+| `border` | `#DCDDE1` | `#2B2E36` | Bordes decorativos de 1 px: tarjetas, separadores |
+| `border-strong` | `#80848E` | `#6B7080` | Borde de los campos de formulario |
 | `text` | `#16181D` | `#ECEDF0` | Texto principal |
 | `text-2` | `#50545E` | `#A3A7B1` | Texto secundario, metadatos |
 | `text-disabled` | `#9A9DA6` | `#5C606B` | Solo elementos deshabilitados |
@@ -52,8 +53,10 @@ escribe un hexadecimal suelto en un componente.**
 | `on-danger` | `#FFFFFF` | `#0B0D12` | Texto sobre `danger` |
 | `focus` | `#1F4FD1` | `#7C9DF5` | Anillo de foco |
 
-Todas las combinaciones de texto cumplen al menos 4.5:1 de contraste. Si se
-agrega un color nuevo, tiene que cumplirlo también, verificado.
+Todas las combinaciones de texto cumplen al menos 4.5:1 de contraste, y
+`border-strong` cumple 3:1 contra `surface`, `bg` y `surface-2` (WCAG 1.4.11,
+componentes de interfaz). Si se agrega un color nuevo, tiene que cumplirlo
+también, verificado: `packages/ui-tokens` lo comprueba en sus tests.
 
 ### 2.2 Reglas
 
@@ -63,6 +66,10 @@ agrega un color nuevo, tiene que cumplirlo también, verificado.
 - **`danger` no es un estado de tarea.** Es para acciones destructivas
   (cancelar, quitar un miembro). Los colores de estado son otra familia
   (sección 3).
+- **`border` no delimita campos.** Da apenas 1.3:1 contra `surface`: sirve para
+  separar una tarjeta del fondo, pero un campo de formulario que se reconoce
+  solo por su borde (y al sol, o con la pantalla barata) tiene que usar
+  `border-strong`.
 - **Sin degradados, sin sombras, sin transparencias decorativas.** La
   jerarquía se arma con superficies y bordes de 1 px. Esto además es más
   liviano para teléfonos de gama baja.
@@ -130,7 +137,8 @@ Reglas:
 - **Márgenes de pantalla en móvil:** 16 a los lados.
 - **Radios:** 10 para botones y campos, 14 para tarjetas, totalmente
   redondeado para chips.
-- **Bordes:** 1 px, color `border`. Nunca más gruesos salvo el anillo de foco.
+- **Bordes:** 1 px, color `border` (`border-strong` en los campos de formulario).
+  Nunca más gruesos salvo el anillo de foco.
 
 ---
 
@@ -199,7 +207,7 @@ una barra de 32 × 3 px arriba. Los inactivos, en `text-2`.
 
 - Etiqueta **siempre visible arriba** del campo, nunca solo como texto de
   ejemplo adentro.
-- Alto 48, radio 10, borde 1 px, fondo `surface`.
+- Alto 48, radio 10, borde 1 px en `border-strong`, fondo `surface`.
 - Error debajo del campo, en `danger`, con ícono, diciendo qué hacer ("Elegí
   un responsable"), no qué salió mal en términos técnicos.
 - Selección antes que escritura: listas, selectores de fecha y hora, botones
@@ -244,8 +252,8 @@ en chips, 20 en botones, 22 en la navegación. Nunca emojis.
 
 ## 10. Accesibilidad
 
-- Contraste mínimo 4.5:1 para texto, 3:1 para texto de 24 px o más e íconos
-  con significado.
+- Contraste mínimo 4.5:1 para texto, 3:1 para texto de 24 px o más, íconos con
+  significado y el borde de los campos de formulario (`border-strong`).
 - Ningún dato se comunica solo con color.
 - Todo botón de ícono lleva `aria-label` (web) o `accessibilityLabel`
   (móvil).

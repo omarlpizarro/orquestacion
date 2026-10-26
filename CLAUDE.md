@@ -89,6 +89,7 @@ Ejemplo: @ts-rest/nest (última estable 3.52.1, marzo 2025) declara peer @nestjs
 | Lint y formato | Biome | 2.5.14 | Reemplaza ESLint y Prettier. `javascript.parser.unsafeParameterDecoratorsEnabled: true` para que parsee los decoradores de parámetro de Nest; `style.useImportType` apagada a propósito (ver `packages/config/biome/base.json`) |
 | Tests | Vitest + Testcontainers | `vitest`/`@vitest/coverage-v8` 4.1.11, `testcontainers`/`@testcontainers/postgresql` 12.1.0 | Postgres real en integración, nunca mocks de base |
 | Fronteras | dependency-cruiser | 18.3.1 | Falla el build si un módulo cruza. `tsPreCompilationDeps: true` es obligatorio o las reglas contra `import type` quedan mudas |
+| Tokens de diseño | `@orq/ui-tokens` | paquete del monorepo | Fuente única de colores, tipografía y escalas de `docs/design-guidelines.md`; `pnpm check` rechaza valores escritos a mano (`check:raw-values`) |
 | Monorepo | Turborepo | 2.11.2 | |
 | Infra | Docker Compose a mano en Ubuntu, ver ADR-014 | — | |
 
@@ -112,6 +113,7 @@ packages/
   contracts/    esquemas Zod + contratos oRPC. Fuente de verdad de la API
   db/           esquema Drizzle, migraciones, seeds
   config/       tsconfig, biome, validación de variables de entorno
+  ui-tokens/    tokens de diseño (colores, tipografía, escalas): fuente única de la web y el móvil
 infra/
   docker/       Dockerfiles y compose
   powersync/    sync rules
@@ -488,7 +490,9 @@ mock no ejecuta.
 - Commits en formato convencional: `feat(scheduling): ...`, `fix(api): ...`.
 - **Toda interfaz (web y móvil) sigue `docs/design-guidelines.md`; ningún
   componente lleva colores, tamaños ni espaciados escritos a mano, solo
-  tokens** (`packages/ui-tokens`, que nace con el primer PR de interfaz).
+  tokens** (`packages/ui-tokens`). `pnpm check` lo hace cumplir: `check:raw-values`
+  falla con un hexadecimal, una función de color o un tamaño arbitrario de
+  Tailwind en `apps/web` o `apps/mobile`.
 
 ---
 
