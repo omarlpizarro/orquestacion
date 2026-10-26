@@ -3,8 +3,8 @@ import type { ReactNode } from 'react';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Orquestación',
-  description: 'Dashboard directivo de orquestación de procesos',
+  title: { default: 'Batuta', template: '%s · Batuta' },
+  description: 'Orquestación de procesos y gestión ejecutiva',
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

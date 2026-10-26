@@ -74,6 +74,14 @@ module.exports = {
       to: { path: npmPackage('@orpc') },
     },
     {
+      name: 'better-auth-client-stays-in-lib',
+      severity: 'error',
+      comment:
+        'ADR-020: el cliente de Better Auth solo se importa desde apps/web/src/lib/auth.ts, igual que oRPC desde lib/api.ts. Si se cambia de librería de auth, el resto de la web no se entera.',
+      from: { path: '^apps/web/', pathNot: '^apps/web/src/lib/auth\\.ts$' },
+      to: { path: npmPackage('better-auth') },
+    },
+    {
       name: 'domain-is-pure',
       severity: 'error',
       comment: '`domain/` no conoce Nest, Drizzle ni infraestructura.',
@@ -136,7 +144,7 @@ module.exports = {
         'Código de src/ no depende de devDependencies (testcontainers, vitest, etc), salvo el propio arnés de testing exportado por packages/db/src/testing.',
       from: {
         path: '^(apps|packages)/[^/]+/src/',
-        pathNot: ['\\.spec\\.ts$', '^packages/db/src/testing/'],
+        pathNot: ['\\.spec\\.tsx?$', '^packages/db/src/testing/'],
       },
       to: { dependencyTypes: ['npm-dev'] },
     },

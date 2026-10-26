@@ -1,8 +1,44 @@
-:root {
-  color-scheme: light dark;
+@import "tailwindcss";
+/* El tema SON los tokens de docs/design-guidelines.md: anula el de Tailwind (ADR-020). */
+@import "@orq/ui-tokens/tailwind.css";
+
+/* Manrope empaquetada con la web, nunca desde Google (guía §4). Solo los cuatro pesos y el subconjunto
+   latino, que cubre el español. */
+@import "@fontsource/manrope/latin-400.css";
+@import "@fontsource/manrope/latin-500.css";
+@import "@fontsource/manrope/latin-600.css";
+@import "@fontsource/manrope/latin-700.css";
+
+@layer base {
+  body {
+    margin: 0;
+    background-color: var(--color-bg);
+    color: var(--color-text);
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    font-weight: var(--text-body--font-weight);
+    line-height: var(--text-body--line-height);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Foco de teclado siempre visible: anillo de 2 px en `focus`, separado 2 px (guía §10). */
+  :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+    outline: var(--focus-ring-width) solid var(--color-focus);
+    outline-offset: var(--focus-ring-offset);
+  }
+
+  /* Cifras tabulares para horas, fechas y cantidades (guía §4). */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
 }
 
-body {
-  margin: 0;
-  font-family: system-ui, -apple-system, sans-serif;
+/* Sin animaciones si la persona lo pidió. Fuera de toda capa, así que gana a las utilidades de Tailwind
+   (que están en una capa) sin necesidad de `!important`. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0ms;
+  }
 }

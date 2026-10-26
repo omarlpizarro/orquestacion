@@ -25,7 +25,7 @@
 # no la del commit destino. La primera vez que un deploy trae este mecanismo
 # todavía corre la versión vieja, sin relanzamiento; rige desde el siguiente.
 #
-# Orden fijo: pull -> build -> migraciones -> reinicio (API y después worker). Las migraciones son un
+# Orden fijo: pull -> build -> migraciones -> reinicio (API, worker y después web). Las migraciones son un
 # paso explícito y nunca corren al arrancar el contenedor de la API
 # (CLAUDE.md §6: despliegues separados). Si un paso falla, `set -e` corta ahí:
 # una migración rota deja corriendo la versión anterior de la API.
@@ -35,7 +35,7 @@
 # CLAUDE.md §6 exige que las migraciones únicamente agreguen y no rompan lo
 # que usa el código anterior.
 #
-# Al terminar bien, conserva las 3 imágenes más recientes de la API (y la
+# Al terminar bien, conserva las 3 imágenes más recientes de la API y de la web (y la
 # desplegada, si es más vieja) y borra el resto: son los destinos de una
 # vuelta atrás, que no reconstruye si la imagen sigue ahí.
 set -euo pipefail
@@ -44,6 +44,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 env_file="$repo_root/infra/docker/.env"
 compose="$repo_root/scripts/compose.sh"
 image_repo="orquestacion-api"
+web_image_repo="orquestacion-web"
 keep_images=3
 
 pull=true
@@ -104,6 +105,7 @@ set -a
 . "$env_file"
 set +a
 api_port="${API_HOST_PORT:-18020}"
+web_port="${WEB_HOST_PORT:-18030}"
 
 # Obligatoria desde ADR-017 (usuario de base de los workers). Vacía o ausente es
 # un error de configuración: mejor frenar acá, antes de tocar nada, que
@@ -119,6 +121,18 @@ if ss -ltnH "sport = :$api_port" | grep -q .; then
   fi
 fi
 
+if ss -ltnH "sport = :$web_port" | grep -q .; then
+  if [ -z "$("$compose" ps -q web 2>/dev/null)" ]; then
+    die "El puerto $web_port del host ya está en uso por otro proceso. Cambiá WEB_HOST_PORT en $env_file."
+  fi
+fi
+
+# Desde ADR-020 el navegador habla con la web, no con la API: BETTER_AUTH_URL tiene que ser el origen
+# de la web. Si sigue apuntando al puerto de la API, el login desde la web falla por origen no confiable.
+case "${BETTER_AUTH_URL:-}" in
+  *":$api_port"|*":$api_port/") die "BETTER_AUTH_URL ($BETTER_AUTH_URL) apunta al puerto de la API. Desde ADR-020 es el origen de la web: http://<host>:$web_port" ;;
+esac
+
 case "${BETTER_AUTH_URL:-}" in
   http://*) echo "Aviso: BETTER_AUTH_URL es http://. Las cookies de sesión saldrán sin Secure (solo válido para la prueba sin TLS)." ;;
 esac
@@ -126,10 +140,10 @@ esac
 # --- Pasos -------------------------------------------------------------------
 
 if [ -n "$target" ]; then
-  step 1/6 "checkout de $target_commit (vuelta atrás)"
+  step 1/7 "checkout de $target_commit (vuelta atrás)"
   git_repo checkout --quiet --detach "$target_commit"
 elif $pull; then
-  step 1/6 "git pull --ff-only"
+  step 1/7 "git pull --ff-only"
   git_repo pull --ff-only
   # Bash sigue ejecutando la versión de este script que ya cargó: si el pull
   # la cambió, los cambios regirían recién en el despliegue siguiente. Se
@@ -141,9 +155,9 @@ elif $pull; then
     DEPLOY_REEXEC=1 exec bash "$repo_root/scripts/deploy.sh" --no-pull
   fi
 elif [ -n "${DEPLOY_REEXEC:-}" ]; then
-  step 1/6 "git pull (hecho antes del relanzamiento)"
+  step 1/7 "git pull (hecho antes del relanzamiento)"
 else
-  step 1/6 "git pull (omitido por --no-pull)"
+  step 1/7 "git pull (omitido por --no-pull)"
 fi
 
 commit="$(git_repo rev-parse HEAD)"
@@ -154,7 +168,7 @@ if [ "$behind" -gt 0 ]; then
 fi
 
 image="$image_repo:$commit"
-step 2/6 "imagen de la API"
+step 2/7 "imágenes de la API y de la web"
 if docker image inspect "$image" >/dev/null 2>&1; then
   # Solo se construye con el árbol limpio (chequeo de arriba), así que una
   # imagen con este tag corresponde exactamente a este commit.
@@ -162,10 +176,16 @@ if docker image inspect "$image" >/dev/null 2>&1; then
 else
   "$compose" build api
 fi
+# Mismo criterio que la API: con el árbol limpio, un tag existente corresponde a este commit.
+if docker image inspect "$web_image_repo:$commit" >/dev/null 2>&1; then
+  echo "$web_image_repo:$commit ya existe: se reutiliza, sin reconstruir."
+else
+  "$compose" build web
+fi
 
 # Postgres tiene que estar arriba para migrar. Es un prerrequisito, no el
 # reinicio: `up -d` no toca un contenedor cuya configuración no cambió.
-step 3/6 "Postgres arriba (prerrequisito de las migraciones)"
+step 3/7 "Postgres arriba (prerrequisito de las migraciones)"
 "$compose" up -d --wait postgres
 
 # El migrador de Drizzle solo aplica lo posterior a la última migración
@@ -180,18 +200,22 @@ if [ "$applied" -gt "$known" ]; then
   echo "       esas migraciones son compatibles hacia atrás (CLAUDE.md §6)."
 fi
 
-step 4/6 "migraciones (como app_owner, contenedor efímero)"
+step 4/7 "migraciones (como app_owner, contenedor efímero)"
 "$compose" run --rm migrate
 
-step 5/6 "reinicio de la API"
+step 5/7 "reinicio de la API"
 "$compose" up -d --wait api
 
 # Después de las migraciones, nunca antes: el worker necesita el esquema pgboss y el
 # EXECUTE sobre app_ensure_audit_partitions que deja el migrador (ADR-018). Sin
 # healthcheck (no escucha en ningún puerto): `--wait` espera a que esté corriendo, y que
 # el job de verdad ande lo verifica el paso 7 de smoke-test.sh.
-step 6/6 "reinicio del worker"
+step 6/7 "reinicio del worker"
 "$compose" up -d --wait worker
+
+# La web va última: depende de la API sana (el compose lo exige) y no toca la base.
+step 7/7 "reinicio de la web"
+"$compose" up -d --wait web
 
 # --- Verificación ------------------------------------------------------------
 
@@ -201,25 +225,33 @@ if [ "$deployed" != "$commit" ]; then
   die "/health reporta commit '$deployed' pero se desplegó '$commit'."
 fi
 
+web_health="$(curl -fsS "http://127.0.0.1:$web_port/healthz")" || die "/healthz de la web no respondió."
+web_deployed="$(printf '%s' "$web_health" | grep -o '"commit":"[^"]*"' | cut -d'"' -f4)"
+if [ "$web_deployed" != "$commit" ]; then
+  die "/healthz reporta commit '$web_deployed' pero se desplegó '$commit'."
+fi
+
 # --- Limpieza de imágenes ----------------------------------------------------
 # Solo después de un despliegue verificado: si fallara, las imágenes anteriores
 # son justamente las que hacen falta para volver atrás. Se toca únicamente el
-# repositorio $image_repo (exacto): en este server hay imágenes de otros
+# repositorios $image_repo y $web_image_repo (exactos): en este server hay imágenes de otros
 # proyectos, y no se hace `image prune` ni `builder prune` porque son globales.
 # La imagen desplegada se conserva siempre, aunque sea vieja (vuelta atrás).
-echo
-echo "Imágenes de $image_repo: se conservan las $keep_images más recientes y la desplegada."
-rank=0
-while IFS= read -r tag; do
-  [ -n "$tag" ] && [ "$tag" != "<none>" ] || continue
-  rank=$((rank + 1))
-  if [ "$rank" -le "$keep_images" ] || [ "$tag" = "$commit" ]; then
-    continue
-  fi
-  docker rmi "$image_repo:$tag" >/dev/null 2>&1 \
-    && echo "  borrada  $image_repo:$tag" \
-    || echo "  no se pudo borrar $image_repo:$tag (¿en uso?), se deja."
-done < <(docker image ls "$image_repo" --format '{{.CreatedAt}}|{{.Tag}}' | sort -r | cut -d'|' -f2)
+for repo in "$image_repo" "$web_image_repo"; do
+  echo
+  echo "Imágenes de $repo: se conservan las $keep_images más recientes y la desplegada."
+  rank=0
+  while IFS= read -r tag; do
+    [ -n "$tag" ] && [ "$tag" != "<none>" ] || continue
+    rank=$((rank + 1))
+    if [ "$rank" -le "$keep_images" ] || [ "$tag" = "$commit" ]; then
+      continue
+    fi
+    docker rmi "$repo:$tag" >/dev/null 2>&1 \
+      && echo "  borrada  $repo:$tag" \
+      || echo "  no se pudo borrar $repo:$tag (¿en uso?), se deja."
+  done < <(docker image ls "$repo" --format '{{.CreatedAt}}|{{.Tag}}' | sort -r | cut -d'|' -f2)
+done
 
 echo
-echo "Desplegado $commit en http://127.0.0.1:$api_port (BETTER_AUTH_URL=$BETTER_AUTH_URL)."
+echo "Desplegado $commit: API en http://127.0.0.1:$api_port, web en http://127.0.0.1:$web_port (BETTER_AUTH_URL=$BETTER_AUTH_URL)."

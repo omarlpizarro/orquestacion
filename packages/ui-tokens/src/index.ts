@@ -30,6 +30,7 @@ export {
   taskStatusIcons,
   taskStatusLabels,
 } from './status.js';
+export { toTailwindTheme } from './tailwind.js';
 export { type ColorScheme, darkTheme, getTheme, lightTheme, type Theme, themes } from './theme.js';
 export {
   FONT_FAMILY,

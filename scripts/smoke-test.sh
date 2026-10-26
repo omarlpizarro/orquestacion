@@ -27,6 +27,11 @@
 #   8. Bandeja de avisos (ADR-019), SOLO LECTURA: falla si hay filas de
 #      `notification_outbox` pendientes hace más de 5 minutos (worker caído o fila que
 #      agotó sus intentos). El detalle lo muestra scripts/verify-notification-outbox.sh.
+#   9. Web (ADR-020), por el puerto de la web y con un jar de cookies propio: /healthz
+#      declara el commit desplegado; sin sesión una página protegida redirige a /login
+#      (la guarda de servidor); el inicio de sesión por el proxy mismo-origen deja una
+#      sesión que persiste; con organización activa la página protegida responde 200; y
+#      /backend/health llega a la API por el proxy. Ejercita los dos rewrites y la guarda.
 #
 # Es idempotente: siempre usa el mismo usuario (smoke@orquestacion.test), la
 # misma organización (slug `smoke`) y el mismo proyecto (SMOKE-001), así que
@@ -56,9 +61,11 @@ if [ -z "${SMOKE_PASSWORD:-}" ]; then
 fi
 
 base="http://127.0.0.1:${API_HOST_PORT:-18020}"
+web_base="http://127.0.0.1:${WEB_HOST_PORT:-18030}"
 expected_commit="$(git -C "$repo_root" rev-parse HEAD)"
 work_dir="$(mktemp -d)"
 jar="$work_dir/cookies"
+web_jar="$work_dir/web-cookies"
 trap 'rm -rf "$work_dir"' EXIT
 
 pass() { printf '  ok   %s\n' "$1"; }
@@ -82,6 +89,13 @@ new_uuidv7() {
 post_json() {
   curl -sS -o "$work_dir/body" -D "$work_dir/headers" -w '%{http_code}' \
     -b "$jar" -c "$jar" -X POST "$base$1" \
+    -H 'content-type: application/json' -H "Origin: $BETTER_AUTH_URL" -d "$2"
+}
+
+# Igual que post_json, pero contra la web y con su propio jar: lo que se prueba es el camino del navegador.
+web_post_json() {
+  curl -sS -o "$work_dir/body" -D "$work_dir/headers" -w '%{http_code}' \
+    -b "$web_jar" -c "$web_jar" -X POST "$web_base$1" \
     -H 'content-type: application/json' -H "Origin: $BETTER_AUTH_URL" -d "$2"
 }
 
@@ -238,6 +252,37 @@ stale_outbox="$(audit_scalar "select count(*) from public.notification_outbox
 [ "$stale_outbox" = "0" ] \
   || fail "$stale_outbox fila(s) de notification_outbox pendiente(s) hace más de 5 minutos (scripts/verify-notification-outbox.sh)"
 pass "ninguna fila pendiente de la bandeja de avisos lleva más de 5 minutos"
+
+echo
+echo "9. Web (proxy mismo-origen y guarda de sesión)"
+web_health="$(curl -fsS "$web_base/healthz")" || fail "/healthz de la web no respondió"
+[ "$(printf '%s' "$web_health" | json_field commit)" = "$expected_commit" ] \
+  || fail "el commit de /healthz no es $expected_commit: $web_health"
+pass "la web corre el commit $expected_commit"
+protected="$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' "$web_base/proyectos")"
+case "$protected" in
+  "307 "*"/login") pass "sin sesión, /proyectos redirige a /login" ;;
+  *) fail "sin sesión, /proyectos debía redirigir a /login y respondió: $protected" ;;
+esac
+status="$(web_post_json /api/auth/sign-in/email "$credentials")"
+[ "$status" = "200" ] \
+  || fail "el inicio de sesión por el proxy de la web falló (HTTP $status): $(cat "$work_dir/body")
+     ¿BETTER_AUTH_URL es el origen de la web? (ADR-020)"
+pass "inicio de sesión por /api/auth de la web"
+web_session="$(curl -fsS -b "$web_jar" "$web_base/api/auth/get-session")" || fail "get-session por la web falló"
+printf '%s' "$web_session" | grep -q "$smoke_email" \
+  || fail "la sesión no persistió por la web: $web_session"
+pass "la sesión persiste a través de la web"
+status="$(web_post_json /api/auth/organization/set-active "{\"organizationId\":\"$org_id\"}")"
+[ "$status" = "200" ] \
+  || fail "no se pudo activar la organización por la web (HTTP $status): $(cat "$work_dir/body")"
+authed="$(curl -sS -o /dev/null -w '%{http_code}' -b "$web_jar" "$web_base/proyectos")"
+[ "$authed" = "200" ] || fail "con sesión y organización activa, /proyectos respondió HTTP $authed"
+pass "con sesión y organización activa, /proyectos responde 200"
+backend="$(curl -fsS "$web_base/backend/health")" || fail "/backend/health por la web falló"
+[ "$(printf '%s' "$backend" | json_field commit)" = "$expected_commit" ] \
+  || fail "/backend/health no llegó a la API del commit $expected_commit: $backend"
+pass "/backend/* llega a la API"
 
 echo
 echo "Prueba de humo OK."
