@@ -82,7 +82,11 @@ Ejemplo: @ts-rest/nest (última estable 3.52.1, marzo 2025) declara peer @nestjs
 | Jobs | pg-boss | 12.33.2 | Sobre el mismo Postgres. Encolado transaccional |
 | Offline | PowerSync (Open Edition, self-hosted) | — | Bucket storage en Postgres separado |
 | Móvil | Expo / React Native | — | SQLite vía PowerSync |
-| Web | Next.js App Router | `next` 16.3.5, `react`/`react-dom` 19.3.0 | |
+| Web | Next.js App Router | `next` 16.3.5, `react`/`react-dom` 19.3.0 | El navegador habla solo con el origen de la web; un proxy (`rewrites`) lo lleva a la API. Ver ADR-020 |
+| Estilos (web) | Tailwind CSS | `tailwindcss` y `@tailwindcss/postcss` 4.3.3 | Sobre los tokens de `packages/ui-tokens`, sin el tema por defecto de Tailwind (ADR-020). `postcss` viene como dependencia de `@tailwindcss/postcss` |
+| Íconos (web) | Lucide | `lucide-react` 1.59.0 | `docs/design-guidelines.md` §7.7. El móvil usará su propio paquete de Lucide, que se decide en su primer PR |
+| Tipografía (web) | Manrope empaquetada | `@fontsource/manrope` 5.3.0 | Solo `woff`/`woff2`, **sin `ttf`: no sirve para React Native**. Nunca desde Google en ejecución. La fuente del móvil se resuelve en el primer PR móvil |
+| Cliente de auth (web) | Better Auth (cliente) | `better-auth` 1.7.5 | Mismo paquete y misma versión que la API. Solo se importa desde `apps/web/src/lib/auth.ts` |
 | PDF | Playwright renderizando una ruta de `apps/web` | — | Contenedor aparte |
 | Excel | ExcelJS | — | |
 | Storage | S3-compatible (MinIO en dev, R2 o MinIO en prod) | — | Presigned URLs |
