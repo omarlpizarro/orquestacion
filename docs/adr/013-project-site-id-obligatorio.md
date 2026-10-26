@@ -136,3 +136,22 @@ TypeScript: dos lugares que pueden divergir en vez de una sola regla.
   alta de Better Auth no captura), ya tomada y diferida a onboarding
   (fase 7). Revertir esa decisión de paso, sin que nadie la haya pedido,
   sería tocar algo que no estaba roto para este cambio.
+
+## Aclaración (2026-10-26): una organización sin `organization_profile`
+
+No cambia ninguna regla de este ADR. Se mantiene que el hook **no** crea `organization_profile`: el
+rubro es un dato que todavía no tenemos, y un `'otro'` por defecto ensuciaría los reportes por rubro
+(fase 6). Lo que se aclara es qué pasa mientras el perfil no existe, que es el estado normal de toda
+organización hasta el onboarding (fase 7).
+
+`TenancyService.resolveTimezone` (la que usa "Mi Día" cuando el pedido no trae zona) resuelve, en este orden:
+
+1. la zona del sitio, si se le pasa uno;
+2. `organization_profile.timezone`, si hay perfil;
+3. la zona del sitio por defecto de la organización (el más antiguo que siga activo), que es el que
+   crea el hook;
+4. `America/Argentina/Buenos_Aires`, si la organización no tiene ningún sitio activo.
+
+Hasta este cambio, sin perfil la función lanzaba un error (los puntos 3 y 4 no existían), así que "Mi Día" fallaba para una
+organización recién creada. Probado en `apps/api/test/my-day-timezone-fallback.integration.spec.ts`.
+`scripts/seed-demo.sh` dejó de insertar el perfil por psql.

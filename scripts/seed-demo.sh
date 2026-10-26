@@ -133,12 +133,6 @@ fi
 expect 200 "no se pudo activar la organización" laura POST /api/auth/organization/set-active \
   "{\"organizationId\":\"$org_id\"}"
 
-# Better Auth no crea `organization_profile` (lo hace el onboarding, fase 7): sin él, "Mi Día" no
-# resuelve la zona horaria de quien consulta. Es lo único que se escribe por fuera de la API.
-"$compose" exec -T postgres psql -U postgres -d orquestacion -v ON_ERROR_STOP=1 -Atq -c \
-  "insert into organization_profile (organization_id, industry) values ('$org_id', 'construccion') on conflict (organization_id) do nothing" < /dev/null
-pass "perfil de la organización (construcción, hora de Argentina)"
-
 echo "3. Miembros (se invita y se acepta por la API: corren los mismos hooks que en producción)"
 for pair in carlos:manager diego:operator; do
   user="${pair%%:*}" role="${pair##*:}"

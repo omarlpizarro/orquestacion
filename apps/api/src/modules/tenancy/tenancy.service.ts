@@ -20,6 +20,9 @@ import {
   hasMemberSiteAccessRow,
 } from './infrastructure/site-access.repository.js';
 
+/** El mismo valor por defecto de `organization_profile.timezone` y del sitio por defecto (ADR-013). */
+export const DEFAULT_ORGANIZATION_TIMEZONE = 'America/Argentina/Buenos_Aires';
+
 export interface ResolveTimezoneParams {
   organizationId: string;
   siteId: string | null;
@@ -63,19 +66,22 @@ export class TenancyService {
       if (result.rows[0]) return result.rows[0].timezone;
     }
 
-    const result = await tx.execute<{ timezone: string }>(sql`
+    const profile = await tx.execute<{ timezone: string }>(sql`
       select timezone from organization_profile where organization_id = ${params.organizationId}
     `);
-    // `organization_profile.timezone` tiene default de columna: si la fila
-    // existe (siempre debería, se crea junto con la organización), esto no
-    // es null. Si no existe la fila, es un dato de setup faltante, no un
-    // caso de negocio a modelar acá.
-    if (!result.rows[0]) {
-      throw new Error(
-        `organization_profile inexistente para organización ${params.organizationId}`,
-      );
-    }
-    return result.rows[0].timezone;
+    if (profile.rows[0]) return profile.rows[0].timezone;
+
+    // Sin perfil (Better Auth no lo crea: el rubro lo carga el onboarding, ADR-013), la zona de la
+    // organización es la de su sitio por defecto: el más antiguo que siga activo (los ids son UUIDv7: ordenar por id es ordenar por creación).
+    const defaultSite = await tx.execute<{ timezone: string }>(sql`
+      select timezone from site
+      where organization_id = ${params.organizationId} and is_active
+      order by id
+      limit 1
+    `);
+    if (defaultSite.rows[0]) return defaultSite.rows[0].timezone;
+
+    return DEFAULT_ORGANIZATION_TIMEZONE;
   }
 
   /**
