@@ -50,7 +50,8 @@ escribe un hexadecimal suelto en un componente.**
 | `primary-pressed` | `#173DA6` | `#9BB4F8` | Estado presionado de `primary` |
 | `on-primary` | `#FFFFFF` | `#0B0D12` | Texto e íconos sobre `primary` |
 | `danger` | `#B42318` | `#FF8A7A` | Acciones destructivas |
-| `on-danger` | `#FFFFFF` | `#0B0D12` | Texto sobre `danger` |
+| `danger-pressed` | `#8E1B12` | `#FFB3A8` | Estado presionado de `danger` |
+| `on-danger` | `#FFFFFF` | `#0B0D12` | Texto sobre `danger` y `danger-pressed` |
 | `focus` | `#1F4FD1` | `#7C9DF5` | Anillo de foco |
 
 Todas las combinaciones de texto cumplen al menos 4.5:1 de contraste, y
@@ -170,7 +171,7 @@ Esta lista es cerrada. Un componente nuevo se propone antes de construirlo.
 | --- | --- | --- | --- | --- |
 | Principal | `primary` | `on-primary` | — | La acción principal de la pantalla |
 | Secundario | `surface` | `text` | `border` | Acciones complementarias |
-| Destructivo | `danger` | `on-danger` | — | Cancelar, quitar, borrar |
+| Destructivo | `danger` (presionado: `danger-pressed`) | `on-danger` | — | Cancelar, quitar, borrar |
 | Ícono | transparente | `text-2` | `border` | Acciones compactas; siempre con `aria-label` |
 
 Alto 48 (íconos 44 × 44), radio 10, texto 16/600. Deshabilitado:
@@ -179,7 +180,7 @@ Alto 48 (íconos 44 × 44), radio 10, texto 16/600. Deshabilitado:
 ### 7.2 Chip de estado
 
 Ícono de 15 px más texto de 13 o 14 px en peso 600, colores de la sección 3,
-radio completo, relleno 5 × 10. No es tocable.
+radio completo, relleno 4 × 8 (de la escala de espaciado). No es tocable.
 
 ### 7.3 Tarjeta de tarea
 

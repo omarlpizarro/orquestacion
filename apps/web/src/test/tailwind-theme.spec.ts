@@ -21,6 +21,7 @@ describe('el tema de la web son los tokens, no la paleta de Tailwind', () => {
     'bg-primary-pressed',
     'text-on-primary',
     'bg-danger',
+    'bg-danger-pressed',
     'text-on-danger',
     'border-border',
     'border-border-strong',
