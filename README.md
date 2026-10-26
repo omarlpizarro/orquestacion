@@ -73,11 +73,13 @@ rompe.
 
 ## Despliegue en el server de demo
 
-API + worker + Postgres en Docker Compose, sobre el servidor Ubuntu compartido. Todo
+API + worker + web + Postgres en Docker Compose, sobre el servidor Ubuntu compartido. Todo
 lo que se crea lleva el prefijo `orquestacion` (proyecto de Compose, red,
 volumen, contenedores) y tiene límite de memoria: en ese server corren otros
-proyectos que no hay que tocar. `web` y MinIO no se despliegan todavía (ver
-`docs/phase-2-brief.md`). El `worker` (pg-boss) sí, desde ADR-018: mantiene
+proyectos que no hay que tocar. MinIO no se despliega todavía (ver
+`docs/phase-2-brief.md`). La `web` (Next.js, ADR-020) sí, desde su shell: es el único
+origen que ve el navegador y reescribe `/api/auth/*` y `/backend/*` hacia la API por la red
+interna. El `worker` (pg-boss) sí, desde ADR-018: mantiene
 las particiones mensuales de `audit_log` (ADR-018) y procesa la bandeja de avisos
 (`notification_outbox`, ADR-019). Misma imagen que la API,
 conecta como `app_worker` y no publica puertos. Para ver que anda:
@@ -87,6 +89,7 @@ lectura); la prueba de humo los chequea en sus pasos 7 y 8.
 | Pieza | Dónde |
 | --- | --- |
 | Imagen de la API (también corre migraciones y scripts) | `infra/docker/api.Dockerfile` |
+| Imagen de la web | `infra/docker/web.Dockerfile` |
 | Compose del server | `infra/docker/compose.server.yml` |
 | Variables del server | `infra/docker/.env` (no versionado; plantilla en `server.env.example`) |
 | Deploy | `scripts/deploy.sh` |
@@ -145,15 +148,17 @@ scripts/deploy.sh
 Hace, en este orden y cortando en el primer error:
 
 1. `git pull --ff-only`.
-2. Imagen de la API, etiquetada con el commit: se construye, o se reutiliza si
-   ya existe una con ese tag.
+2. Imágenes de la API y de la web, etiquetadas con el commit: se construyen, o se
+   reutilizan si ya existe una con ese tag.
 3. Postgres arriba (prerrequisito de migrar, no un reinicio).
 4. **Migraciones** como paso explícito, en un contenedor efímero con las
    credenciales de `app_owner`. La API nunca las recibe ni migra al arrancar
    (regla de despliegues separados, `CLAUDE.md` sección 6).
 5. Reinicio de la API y espera a que quede `healthy`.
+6. Reinicio del worker.
+7. Reinicio de la web, que depende de la API sana.
 
-Al final compara el commit que devuelve `/health` con el desplegado y, solo si
+Al final compara el commit que devuelven `/health` (API) y `/healthz` (web) con el desplegado y, solo si
 salió todo bien, borra imágenes viejas (ver más abajo). Si una migración falla,
 la API vieja sigue corriendo.
 
@@ -162,8 +167,9 @@ commit a desplegar sea ancestro de `origin/main` (`git merge-base --is-ancestor`
 `origin/main` misma, o cualquier versión anterior. `deploy.sh` se niega si no
 lo es, si el árbol está sucio, si el pull no se hace desde `main` o si `main`
 local tiene commits que no están en `origin/main`; no hay flag para saltearlo.
-También se niega con algún `CHANGE_ME` en `.env`, con `APP_WORKER_PASSWORD` vacía o ausente, o si el puerto de la API lo
-usa otro proceso.
+También se niega con algún `CHANGE_ME` en `.env`, con `APP_WORKER_PASSWORD` vacía o ausente, si el puerto de la API o el de la web lo
+usa otro proceso, o si `BETTER_AUTH_URL` sigue apuntando al puerto de la API (desde ADR-020 es el
+origen de la web).
 
 Las decisiones detrás de este mecanismo (Compose a mano en vez de Coolify,
 build en el servidor, migraciones como contenedor efímero, HTTP en la LAN) y
@@ -209,20 +215,23 @@ Qué hay que saber antes de usarlo:
 ### Imágenes
 
 Cada deploy exitoso conserva las 3 imágenes más recientes de
-`orquestacion-api` (más la desplegada, si es una más vieja tras una vuelta
-atrás) y borra el resto. Solo toca ese repositorio: en el server hay imágenes
+`orquestacion-api` y de `orquestacion-web` (más la desplegada, si es una más vieja tras una vuelta
+atrás) y borra el resto. Solo toca esos dos repositorios: en el server hay imágenes
 de otros proyectos, y no se corre `docker image prune` ni `docker builder
 prune` porque son globales. Un despliegue que falla no borra nada, porque las
 imágenes anteriores son justo las que hacen falta para volver.
 
 ### Puertos y aislamiento
 
-- La API se publica en el puerto `API_HOST_PORT` (por defecto `18020`).
+- La API se publica en el puerto `API_HOST_PORT` (por defecto `18020`) y la web en
+  `WEB_HOST_PORT` (por defecto `18030`; `deploy.sh` lo chequea antes de levantar). Los dos
+  puertos son del host; el navegador usa el de la web.
   Verificado libre el 2026-09-29; ocupados por otros proyectos: 22, 1433,
   3000, 5432, 6333, 6334, 6379, 8000, 8080, 18000 y 18010.
 - **Postgres no publica ningún puerto.** Solo es alcanzable desde la red
   interna de Compose. Para entrar: `scripts/compose.sh exec postgres psql -U postgres -d orquestacion`.
-- Límites: 512 MB la API y Postgres, 256 MB las migraciones. Logs rotados
+- Límites: 512 MB la API y Postgres, 256 MB la web (medido en la imagen real: ~58 MiB tras
+  40 pedidos), el worker y las migraciones. Logs rotados
   (3 archivos de 10 MB).
 
 ### Correr un script operativo
@@ -252,7 +261,9 @@ string (nuestro caso, viene de `BETTER_AUTH_URL`), es `Secure` si y solo si
 `BETTER_AUTH_URL` empieza con `https://`. `NODE_ENV=production` **no** cambia
 eso: solo cuenta cuando no hay `baseURL`, y acá siempre lo hay.
 
-Consecuencia: con `BETTER_AUTH_URL=http://192.168.0.105:18020` las cookies salen
+Desde ADR-020 `BETTER_AUTH_URL` es el **origen de la web** (el navegador solo habla con ese
+origen; la API nunca se ve desde afuera salvo el móvil, que le habla directo).
+Consecuencia: con `BETTER_AUTH_URL=http://192.168.0.105:18030` las cookies salen
 sin `Secure` y la sesión persiste sin TLS. Con `https://` salen con `Secure` (y
 con el prefijo `__Secure-`), y desde ese momento **exigen TLS de punta a
 punta**: si la API quedara detrás de un proxy que termina TLS, la URL pública
@@ -273,8 +284,10 @@ scripts/smoke-test.sh
 Verifica: `/health` (conecta como `app_login`, devuelve el commit desplegado),
 Postgres sin puerto publicado, cuenta de humo con cookies coherentes con el
 esquema de `BETTER_AUTH_URL` y sesión que persiste, organización de humo con
-sitio por defecto (ADR-013) y `ensure-default-sites` corriendo dentro del
-contenedor.
+sitio por defecto (ADR-013), `ensure-default-sites` corriendo dentro del
+contenedor y, en el paso 9, la web: `/healthz` con el commit, redirección a `/login` sin sesión,
+inicio de sesión y sesión por el proxy mismo-origen, página protegida con organización activa
+y `/backend/*` llegando a la API.
 
 Es idempotente: usa siempre la cuenta `smoke@orquestacion.test` y la
 organización con slug `smoke`. Si existen, inicia sesión y las reutiliza; si

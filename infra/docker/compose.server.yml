@@ -81,6 +81,45 @@ services:
     security_opt: ["no-new-privileges:true"]
     logging: *logging
 
+  # Web (ADR-020): Next.js en modo standalone. El navegador solo habla con este origen; los
+  # prefijos /api/auth y /backend se reescriben hacia la API por la red interna (el destino
+  # queda grabado en el build, por eso API_URL es un argumento y no una variable de entorno).
+  # Medido en la imagen real: ~58 MiB tras 40 pedidos; el límite deja holgura de sobra.
+  web:
+    build:
+      context: ../..
+      dockerfile: infra/docker/web.Dockerfile
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:?GIT_COMMIT lo fija scripts/compose.sh}
+        API_URL: http://api:3000
+    image: orquestacion-web:${GIT_COMMIT:?GIT_COMMIT lo fija scripts/compose.sh}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      API_URL: http://api:3000
+      NODE_OPTIONS: --max-old-space-size=192
+    ports:
+      - "${WEB_HOST_PORT:-18030}:3000"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/healthz').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 0.5
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    logging: *logging
+
   # Worker de pg-boss (ADR-018): hoy mantiene las particiones mensuales de audit_log.
   # Misma imagen que la API, otro comando. Conecta como app_worker, nunca con las
   # credenciales de la API ni de app_owner, y no publica puertos. Sin healthcheck a
