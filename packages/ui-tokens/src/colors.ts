@@ -33,7 +33,9 @@ export interface ColorTokens {
   onPrimary: string;
   /** Acciones destructivas. No es un estado de tarea. */
   danger: string;
-  /** Texto sobre `danger`. */
+  /** Estado presionado de `danger`. */
+  dangerPressed: string;
+  /** Texto sobre `danger` y `danger-pressed`. */
   onDanger: string;
   /** Anillo de foco. */
   focus: string;
@@ -52,6 +54,7 @@ export const lightColors: ColorTokens = {
   primaryPressed: '#173DA6',
   onPrimary: '#FFFFFF',
   danger: '#B42318',
+  dangerPressed: '#8E1B12',
   onDanger: '#FFFFFF',
   focus: '#1F4FD1',
 };
@@ -69,6 +72,7 @@ export const darkColors: ColorTokens = {
   primaryPressed: '#9BB4F8',
   onPrimary: '#0B0D12',
   danger: '#FF8A7A',
+  dangerPressed: '#FFB3A8',
   onDanger: '#0B0D12',
   focus: '#7C9DF5',
 };

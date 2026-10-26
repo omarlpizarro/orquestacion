@@ -34,8 +34,7 @@ const COLORS: Record<TaskStatus, string> = {
 export function StatusChip({ status }: { status: TaskStatus }) {
   const Icon = ICONS[taskStatusIcons[status]];
   return (
-    // Relleno 4 × 8: la guía dice 5 × 10 (§7.2) pero también que la escala de espaciado no admite otros
-    // valores que 4, 8, 12... (§5). Gana la escala.
+    // Relleno 4 × 8 (guía §7.2): valores de la escala de espaciado.
     <span
       className={`inline-flex items-center gap-4 rounded-pill px-8 py-4 text-secondary font-semibold ${COLORS[status]}`}
     >

@@ -52,6 +52,12 @@ describe('Button', () => {
     expect(html).toContain('aria-label="Abrir tarea"');
   });
 
+  it('el destructivo se oscurece al presionarlo (danger-pressed), solo si está habilitado', () => {
+    const html = renderToStaticMarkup(<Button variant="destructive">Quitar</Button>);
+    expect(html).toContain('enabled:hover:bg-danger-pressed');
+    expect(html).toContain('enabled:active:bg-danger-pressed');
+  });
+
   it('el principal puede ocupar el ancho completo', () => {
     expect(renderToStaticMarkup(<Button fullWidth>Guardar</Button>)).toContain('w-full');
     expect(renderToStaticMarkup(<Button>Guardar</Button>)).not.toContain('w-full');
@@ -121,6 +127,12 @@ describe('StatusChip', () => {
       return html.match(/lucide-([a-z-]+)/)?.[1];
     });
     expect(new Set(paths).size).toBe(TASK_STATUSES.length);
+  });
+
+  it('el relleno es 4 × 8, de la escala de espaciado', () => {
+    const classes = classesOf(renderToStaticMarkup(<StatusChip status="done" />));
+    expect(classes).toContain('py-4');
+    expect(classes).toContain('px-8');
   });
 
   it('no es tocable: no es un botón ni un enlace', () => {
