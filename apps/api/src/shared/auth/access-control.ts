@@ -22,6 +22,9 @@ export const statement = {
   // Cada miembro ve y marca como leídos SUS avisos (ADR-019). No es una capacidad que separe
   // roles: los cuatro la tienen; existe para que la regla esté en el mismo mapa que las demás.
   notification: ['read'],
+  // Resolver nombres de los miembros de la PROPIA organización (nombre y nada más). No separa roles:
+  // los cuatro la tienen, porque toda pantalla que muestra un autor o un responsable la necesita.
+  directory: ['read'],
 } as const;
 
 export const accessControl = createAccessControl(statement);
@@ -34,6 +37,7 @@ export const ownerRole = accessControl.newRole({
   project: ['create', 'change_visibility', 'manage_members'],
   site: ['grant_access'],
   notification: ['read'],
+  directory: ['read'],
 });
 
 export const directorRole = accessControl.newRole({
@@ -44,6 +48,7 @@ export const directorRole = accessControl.newRole({
   project: ['create', 'change_visibility', 'manage_members'],
   site: ['grant_access'],
   notification: ['read'],
+  directory: ['read'],
 });
 
 /**
@@ -58,6 +63,7 @@ export const managerRole = accessControl.newRole({
   invitation: ['create'],
   task: ['create', 'update', 'assign', 'delete'],
   notification: ['read'],
+  directory: ['read'],
 });
 
 /**
@@ -72,6 +78,7 @@ export const operatorRole = accessControl.newRole({
   invitation: [],
   task: [],
   notification: ['read'],
+  directory: ['read'],
 });
 
 export const organizationRoles = {

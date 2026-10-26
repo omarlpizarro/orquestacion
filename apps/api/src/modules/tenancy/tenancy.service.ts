@@ -13,6 +13,7 @@ import {
 import {
   findActiveSiteIds,
   findMemberForTenant,
+  findMemberNames,
   findOrganizationMemberIds,
   findSiteForTenant,
   findSiteManagerMemberIds,
@@ -139,6 +140,27 @@ export class TenancyService {
     params: { organizationId: string; memberIds: string[] },
   ): Promise<string[]> {
     return findOrganizationMemberIds(tx, params);
+  }
+
+  /**
+   * Los nombres de estos miembros, solo de los que son de la organización (ADR-019 y brief: los
+   * clientes resuelven nombres en lote, una consulta por pantalla). Sin repetir y en el orden en que
+   * se pidieron; los ids que faltan no vuelven.
+   */
+  async listMemberNames(
+    tx: Tx,
+    params: { organizationId: string; memberIds: readonly string[] },
+  ): Promise<Array<{ id: string; name: string }>> {
+    const requested = [...new Set(params.memberIds)];
+    const found = new Map(
+      (
+        await findMemberNames(tx, { organizationId: params.organizationId, memberIds: requested })
+      ).map((member) => [member.id, member.name] as const),
+    );
+    return requested.flatMap((id) => {
+      const name = found.get(id);
+      return name === undefined ? [] : [{ id, name }];
+    });
   }
 
   /** ¿Existe este sitio en la organización? Para validar un `site_id` que llega en un pedido. */

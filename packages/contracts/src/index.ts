@@ -17,12 +17,14 @@ import { listProjectsContract } from './projects/list-projects.contract.js';
 import { myDayContract } from './projects/my-day.contract.js';
 import { removeProjectMemberContract } from './projects/remove-project-member.contract.js';
 import { updateTaskContract } from './projects/update-task.contract.js';
+import { getMemberNamesContract } from './tenancy/get-member-names.contract.js';
 import { grantSiteAccessContract } from './tenancy/grant-site-access.contract.js';
 
 export const contract = populateContractRouterPaths({
   health: healthContract,
   tenancy: {
     grantSiteAccess: grantSiteAccessContract,
+    getMemberNames: getMemberNamesContract,
   },
   notifications: {
     listNotifications: listNotificationsContract,
@@ -190,6 +192,16 @@ export { idSchema, newId } from './shared/id.js';
 export { localDateTimeSchema } from './shared/local-datetime.js';
 export { memberIdSchema } from './shared/member-id.js';
 export { ianaTimeZoneSchema } from './shared/time-zone.js';
+export {
+  type GetMemberNamesInput,
+  type GetMemberNamesOutput,
+  getMemberNamesContract,
+  getMemberNamesInputSchema,
+  getMemberNamesOutputSchema,
+  MAX_MEMBER_NAMES_PER_REQUEST,
+  type MemberName,
+  memberNameSchema,
+} from './tenancy/get-member-names.contract.js';
 export {
   type GrantSiteAccessInput,
   type GrantSiteAccessOutput,
