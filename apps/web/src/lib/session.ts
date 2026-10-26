@@ -59,6 +59,17 @@ export const getSession = cache(async (): Promise<Session | null> => {
   };
 });
 
+/**
+ * El rol de quien consulta en la organización activa (`owner`, `director`, `manager`, `operator`), o `null`.
+ * Solo sirve para decidir qué acciones mostrar: la API es quien decide qué se puede hacer de verdad.
+ */
+export const getActiveMemberRole = cache(async (): Promise<string | null> => {
+  const response = await authFetch('/api/auth/organization/get-active-member-role');
+  if (!response) return null;
+  const body = asRecord(await response.json().catch(() => null));
+  return typeof body?.role === 'string' ? body.role : null;
+});
+
 /** La organización activa, para mostrar su nombre. `null` si no hay o no se pudo leer. */
 export const getActiveOrganization = cache(async (): Promise<OrganizationSummary | null> => {
   const session = await getSession();
