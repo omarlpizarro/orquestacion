@@ -43,7 +43,7 @@ const DISABLED = 'disabled:border-transparent disabled:bg-surface-2 disabled:tex
 const VARIANTS = {
   primary: `min-h-control px-16 bg-primary text-on-primary enabled:hover:bg-primary-pressed enabled:active:bg-primary-pressed ${DISABLED}`,
   secondary: `min-h-control px-16 border border-border bg-surface text-text enabled:hover:bg-surface-2 enabled:active:bg-surface-2 ${DISABLED}`,
-  destructive: `min-h-control px-16 bg-danger text-on-danger ${DISABLED}`,
+  destructive: `min-h-control px-16 bg-danger text-on-danger enabled:hover:bg-danger-pressed enabled:active:bg-danger-pressed ${DISABLED}`,
   icon: `size-touch border border-border bg-transparent text-text-2 enabled:hover:bg-surface-2 enabled:active:bg-surface-2 ${DISABLED}`,
 } as const;
 

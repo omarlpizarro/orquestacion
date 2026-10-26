@@ -306,8 +306,9 @@ escribe en la base.
 Es idempotente (ids y `client_mutation_id` fijos): correrlo de nuevo no duplica nada y retoma donde se cortó.
 Las fechas planificadas son relativas al día de la primera corrida; para una demo con fechas frescas hay que
 empezar de cero. Crea todo por la API (cuentas, organización, invitaciones aceptadas, proyectos, tareas,
-estados, comentarios), de modo que corren los mismos hooks, reglas de RLS y avisos que en producción; lo único
-que escribe por fuera es el perfil de la organización, que Better Auth no crea (onboarding, fase 7).
+estados, comentarios), de modo que corren los mismos hooks, reglas de RLS y avisos que en producción. No escribe
+nada por fuera de la API: la organización no tiene `organization_profile` (el rubro es un dato del onboarding,
+fase 7) y "Mi Día" usa la zona de su sitio por defecto (aclaración en ADR-013).
 
 ## Flujo de trabajo
 

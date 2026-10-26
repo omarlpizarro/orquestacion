@@ -64,6 +64,7 @@ describe('colores base', () => {
       ['danger', 'bg'],
       ['danger', 'surface'],
       ['onDanger', 'danger'],
+      ['onDanger', 'dangerPressed'],
     ];
 
     it.each(textOn)('%s sobre %s cumple 4.5:1 (texto)', (fg, bg) => {
