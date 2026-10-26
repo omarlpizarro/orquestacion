@@ -100,3 +100,26 @@ export async function findOrganizationMemberIds(
   `);
   return result.rows.map((row) => row.id);
 }
+
+/**
+ * Nombre de cada miembro pedido que es de la organización. `auth.member` y `auth."user"` no tienen
+ * RLS (ADR-011): el `organization_id` de este `WHERE` es lo ÚNICO que impide devolver el nombre de
+ * alguien de otro tenant. Un id ajeno, inventado o de alguien que ya no está simplemente no vuelve.
+ * Solo el nombre: nunca el email ni nada más de `user`.
+ */
+export async function findMemberNames(
+  tx: Tx,
+  params: { organizationId: string; memberIds: string[] },
+): Promise<Array<{ id: string; name: string }>> {
+  if (params.memberIds.length === 0) return [];
+  // `sql.param(array)`: drizzle expande un arreglo común en `(a, b, c)`, no en un parámetro.
+  const result = await tx.execute<{ id: string; name: string }>(sql`
+    select m.id, u.name
+      from auth.member m
+      join auth."user" u on u.id = m.user_id
+     where m.organization_id = ${params.organizationId}
+       and m.id = any(${sql.param(params.memberIds)}::text[])
+     order by m.id
+  `);
+  return result.rows;
+}

@@ -87,3 +87,15 @@ describe('hasCapability: notification:read', () => {
     expect(hasCapability('rol_inventado', { notification: ['read'] })).toBe(false);
   });
 });
+
+describe('hasCapability: directory:read', () => {
+  it('los cuatro roles resuelven nombres de los miembros de su organización', () => {
+    for (const role of ['owner', 'director', 'manager', 'operator']) {
+      expect(hasCapability(role, { directory: ['read'] }), role).toBe(true);
+    }
+  });
+
+  it('un rol que no existe no los resuelve', () => {
+    expect(hasCapability('rol_inventado', { directory: ['read'] })).toBe(false);
+  });
+});
