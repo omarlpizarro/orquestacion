@@ -200,7 +200,8 @@ color en la tarjeta entera.
 ### 7.4 Navegación inferior (móvil)
 
 Cuatro destinos como máximo: Mi Día, Proyectos, Alertas, Perfil. Alto 64.
-Ícono de 22 más texto de 12. El destino activo va en `primary`, peso 700 y con
+Ícono de 22 más texto de 13 (el mínimo de la sección 4: no hay un rol de texto
+propio para la navegación). El destino activo va en `primary`, peso 700 y con
 una barra de 32 × 3 px arriba. Los inactivos, en `text-2`.
 
 ### 7.5 Campos de formulario
