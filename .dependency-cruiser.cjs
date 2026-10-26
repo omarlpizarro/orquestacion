@@ -99,6 +99,25 @@ module.exports = {
       },
     },
     {
+      name: 'ui-tokens-stay-pure',
+      severity: 'error',
+      comment:
+        'packages/ui-tokens es la fuente única de los tokens de diseño (docs/design-guidelines.md, sección 11.1) y lo consumen web y móvil: no conoce base de datos, Nest, React, Next ni Tailwind.',
+      from: { path: '^packages/ui-tokens/' },
+      to: {
+        path: [
+          '^packages/db/',
+          npmPackage('@nestjs'),
+          npmPackage('pg'),
+          npmPackage('drizzle-orm'),
+          npmPackage('react'),
+          npmPackage('next'),
+          npmPackage('tailwindcss'),
+          npmPackage('lucide-react'),
+        ],
+      },
+    },
+    {
       name: 'no-db-from-web',
       severity: 'error',
       from: { path: '^apps/web/' },

@@ -488,7 +488,9 @@ mock no ejecuta.
 - Commits en formato convencional: `feat(scheduling): ...`, `fix(api): ...`.
 - **Toda interfaz (web y móvil) sigue `docs/design-guidelines.md`; ningún
   componente lleva colores, tamaños ni espaciados escritos a mano, solo
-  tokens** (`packages/ui-tokens`, que nace con el primer PR de interfaz).
+  tokens** (`packages/ui-tokens`). `pnpm check` lo hace cumplir: `check:raw-values`
+  falla con un hexadecimal, una función de color o un tamaño arbitrario de
+  Tailwind en `apps/web` o `apps/mobile`.
 
 ---
 

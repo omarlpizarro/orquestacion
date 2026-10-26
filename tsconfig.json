@@ -3,6 +3,7 @@
   "references": [
     { "path": "packages/config" },
     { "path": "packages/contracts" },
-    { "path": "packages/db" }
+    { "path": "packages/db" },
+    { "path": "packages/ui-tokens" }
   ]
 }
