@@ -9,6 +9,7 @@ vi.mock('../app/(app)/proyectos/nuevo/actions', () => ({ createProjectAction: vi
 
 import { CreateProjectForm } from './create-project-form';
 import { ProjectList, type ProjectSummary } from './project-list';
+import { parseVisibility } from './project-visibility-field';
 import { ButtonLink } from './ui/button';
 import { TextAreaField } from './ui/field';
 
@@ -74,8 +75,10 @@ describe('CreateProjectForm', () => {
 
   it('no pregunta el sitio (guía §8): con uno solo la API lo elige', () => {
     // Solo el texto visible: la clase `transition-colors` también contiene la cadena.
-    const visibleText = html.replace(/<[^>]*>/g, ' ').toLowerCase();
-    expect(visibleText).not.toContain('sitio');
+    // Ninguna etiqueta ni selector de sitio. "Del sitio" es una opción de visibilidad, otra cosa.
+    expect(html).not.toMatch(/>\s*Sitio\s*</);
+    expect(html).not.toContain('site_id');
+    expect(html).not.toContain('<select');
     expect(html).not.toContain('name="site_id"');
   });
 
@@ -84,6 +87,19 @@ describe('CreateProjectForm', () => {
     expect(html).toContain('Más opciones');
     expect(html).toContain('<textarea');
     expect(html.indexOf('<textarea')).toBeGreaterThan(html.indexOf('<details'));
+  });
+
+  it('la visibilidad va en "Más opciones": dos opciones con radio, reservado marcado por defecto', () => {
+    const radios = html.match(/<input[^>]*type="radio"[^>]*>/g) ?? [];
+    expect(radios).toHaveLength(2);
+    const reserved = radios.find((radio) => radio.includes('value="reserved"'));
+    const site = radios.find((radio) => radio.includes('value="site"'));
+    expect(reserved).toContain('checked');
+    expect(site).not.toContain('checked');
+    for (const radio of radios) expect(radio).toContain('name="visibility"');
+    expect(html).toContain('Reservado: lo ven la dirección y quienes tengan tareas en él');
+    expect(html).toContain('Del sitio: lo ve todo el que trabaja en ese sitio');
+    expect(html.indexOf('type="radio"')).toBeGreaterThan(html.indexOf('<details'));
   });
 
   it('una sola acción principal (submit con verbo) y cancelar como enlace', () => {
@@ -101,6 +117,15 @@ describe('CreateProjectForm', () => {
 
   it('todas sus clases existen en el CSS de la web', async () => {
     await expectEveryClassToExist(html);
+  });
+});
+
+describe('parseVisibility', () => {
+  it('site solo si lo eligieron; todo lo demás es reservado', () => {
+    expect(parseVisibility('site')).toBe('site');
+    expect(parseVisibility('reserved')).toBe('reserved');
+    expect(parseVisibility(null)).toBe('reserved');
+    expect(parseVisibility('cualquier cosa')).toBe('reserved');
   });
 });
 

@@ -34,7 +34,7 @@ export function feedbackForRejection(rejection: RejectedCall): CreateProjectFeed
   ) {
     return {
       message:
-        'Tu organización tiene más de un sitio y desde acá todavía no se puede elegir en cuál va el proyecto.',
+        'No pudimos elegir el sitio del proyecto: tu organización tiene más de un sitio activo, o ninguno, y desde acá todavía no se puede elegirlo.',
     };
   }
   if (rejection.code === 'BAD_REQUEST') {

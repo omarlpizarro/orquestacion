@@ -8,6 +8,7 @@ import {
   type CreateProjectFeedback,
   GENERIC_CREATE_FAILURE,
 } from '../app/(app)/proyectos/nuevo/create-project-feedback';
+import { ProjectVisibilityField, parseVisibility } from './project-visibility-field';
 import { Button, ButtonLink } from './ui/button';
 import { Field, TextAreaField } from './ui/field';
 
@@ -52,6 +53,7 @@ export function CreateProjectForm() {
     const code = String(form.get('code') ?? '').trim();
     const name = String(form.get('name') ?? '').trim();
     const description = String(form.get('description') ?? '').trim();
+    const visibility = parseVisibility(form.get('visibility'));
 
     const found: FieldErrors = {
       code: tooLongOrEmpty(
@@ -82,6 +84,7 @@ export function CreateProjectForm() {
         client_mutation_id: ids.clientMutationId,
         code,
         name,
+        visibility,
         ...(description ? { description } : {}),
       });
       if (result.ok) {
@@ -112,7 +115,8 @@ export function CreateProjectForm() {
         <summary className="flex min-h-touch cursor-pointer items-center px-16 text-secondary-medium text-text">
           Más opciones
         </summary>
-        <div className="px-16 pb-16 pt-8">
+        <div className="flex flex-col gap-16 px-16 pb-16 pt-8">
+          <ProjectVisibilityField disabled={pending} />
           <TextAreaField
             label="Descripción"
             name="description"

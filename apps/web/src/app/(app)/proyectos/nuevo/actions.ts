@@ -16,6 +16,7 @@ export interface CreateProjectFormValues {
   code: string;
   name: string;
   description?: string | undefined;
+  visibility: 'reserved' | 'site';
 }
 
 /**

@@ -21,12 +21,12 @@ describe('feedbackForRejection', () => {
     expect(feedbackForRejection({ code }).message).toBe(message);
   });
 
-  it('con más de un sitio lo dice claro, porque la web todavía no deja elegirlo', () => {
+  it('site_required dice algo cierto con varios sitios y con ninguno activo', () => {
     const feedback = feedbackForRejection({
       code: 'UNPROCESSABLE_CONTENT',
       domainCode: 'project_site_required',
     });
-    expect(feedback.message).toContain('más de un sitio');
+    expect(feedback.message).toContain('más de un sitio activo, o ninguno');
   });
 
   it('cualquier otra cosa es la falla genérica, sin códigos internos', () => {
