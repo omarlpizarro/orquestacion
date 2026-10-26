@@ -281,6 +281,21 @@ organización con slug `smoke`. Si existen, inicia sesión y las reutiliza; si
 no, las crea. El password de la cuenta es `SMOKE_PASSWORD` en
 `infra/docker/.env`; si falta, la primera corrida lo genera y lo agrega.
 
+### Datos de demo
+
+`scripts/seed-demo.sh --demo` crea una organización de demo ("Constructora Demo") para poder mostrar el
+producto: una dueña, un gerente y un operario (las tres cuentas con la misma contraseña, `DEMO_PASSWORD`,
+que se genera en la primera corrida y queda en `infra/docker/.env`), un proyecto abierto al sitio con
+tareas en todos los estados, y uno reservado para mostrar la visibilidad. **Solo para el servidor de demo,
+nunca para un ambiente con datos de un cliente**: sin `--demo` se niega. Lo corre Omar a mano, porque
+escribe en la base.
+
+Es idempotente (ids y `client_mutation_id` fijos): correrlo de nuevo no duplica nada y retoma donde se cortó.
+Las fechas planificadas son relativas al día de la primera corrida; para una demo con fechas frescas hay que
+empezar de cero. Crea todo por la API (cuentas, organización, invitaciones aceptadas, proyectos, tareas,
+estados, comentarios), de modo que corren los mismos hooks, reglas de RLS y avisos que en producción; lo único
+que escribe por fuera es el perfil de la organización, que Better Auth no crea (onboarding, fase 7).
+
 ## Flujo de trabajo
 
 1. Rama por tarea desde `main`.
