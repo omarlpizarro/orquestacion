@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import type { ButtonHTMLAttributes, ReactNode } from 'react';
 
 /**
@@ -26,6 +27,14 @@ export type ButtonProps = TextButtonProps | IconButtonProps;
 const BASE =
   'inline-flex items-center justify-center gap-8 rounded-control text-button transition-colors disabled:cursor-not-allowed';
 
+// Un enlace no se deshabilita: solo cambia al pasar el puntero o al presionarlo.
+const LINK_VARIANTS = {
+  primary:
+    'min-h-control px-16 bg-primary text-on-primary hover:bg-primary-pressed active:bg-primary-pressed',
+  secondary:
+    'min-h-control px-16 border border-border bg-surface text-text hover:bg-surface-2 active:bg-surface-2',
+} as const;
+
 // Deshabilitado: `text-disabled` sobre `surface-2`, sin borde. `enabled:` en hover/active para que un
 // botón deshabilitado no responda al puntero.
 const DISABLED = 'disabled:border-transparent disabled:bg-surface-2 disabled:text-text-disabled';
@@ -37,6 +46,28 @@ const VARIANTS = {
   destructive: `min-h-control px-16 bg-danger text-on-danger ${DISABLED}`,
   icon: `size-touch border border-border bg-transparent text-text-2 enabled:hover:bg-surface-2 enabled:active:bg-surface-2 ${DISABLED}`,
 } as const;
+
+/**
+ * Un enlace con el aspecto de un botón (§7.1): navegar es un `<a>`, no un `<button>` que simula serlo
+ * (§10). Solo las variantes de texto; un enlace no se deshabilita.
+ */
+export function ButtonLink({
+  href,
+  variant = 'primary',
+  fullWidth = false,
+  children,
+}: {
+  href: string;
+  variant?: 'primary' | 'secondary';
+  fullWidth?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <Link href={href} className={`${BASE} ${LINK_VARIANTS[variant]}${fullWidth ? ' w-full' : ''}`}>
+      {children}
+    </Link>
+  );
+}
 
 export function Button(props: ButtonProps) {
   // `type="button"` por defecto: un botón dentro de un formulario no envía sin querer.
